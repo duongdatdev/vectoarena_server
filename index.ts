@@ -3,6 +3,7 @@ import { WebSocketTransport } from "@colyseus/ws-transport";
 import { createServer } from "http";
 import express from "express";
 import cors from "cors";
+import { BattleRoom } from "./rooms/BattleRoom";
 
 const port = Number(process.env.PORT || 2567);
 const app = express();
@@ -16,6 +17,8 @@ const gameServer = new Server({
         server: httpServer
     })
 });
+
+gameServer.define("battle", BattleRoom);
 
 gameServer.listen(port)
     .then(() => console.log(`[GameServer] Listening on Port: ${port}`))
