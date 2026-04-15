@@ -1,16 +1,28 @@
 import { Client, Room } from "colyseus";
-import { Schema, MapSchema, type } from "@colyseus/schema";
+import { GameState } from "../schema/GameState";
 import { PlayerState } from "../schema/PlayerState";
 
-class BattleRoomState extends Schema {
-  @type({ map: PlayerState })
-  players = new MapSchema<PlayerState>();
-}
-
-export class BattleRoom extends Room<{ state: BattleRoomState }> {
+export class BattleRoom extends Room<{ state: GameState }> {
   onCreate() {
-    this.setState(new BattleRoomState());
+    this.maxClients = 2;
+    this.setState(new GameState());
     console.log("[BattleRoom] Room created");
+
+    this.onMessage("move", (client, data) => {
+      if (this.state.matchState !== "PLAYING") return;
+      const player = this.state.players.get(client.sessionId);
+      if (player) {
+        player.x = data.x;
+        player.y = data.y;
+        player.z = data.z;
+      }
+    });
+
+    this.onMessage("shoot", (client, data) => {
+      if (this.state.matchState !== "PLAYING") return;
+      // Broadcast shoot event to other clients
+      this.broadcast("shoot", { clientId: client.sessionId, ...data }, { except: client });
+    });
   }
 
   onJoin(client: Client) {
@@ -23,6 +35,12 @@ export class BattleRoom extends Room<{ state: BattleRoomState }> {
 
     this.state.players.set(client.sessionId, player);
     console.log(`[BattleRoom] Client joined: ${client.sessionId}`);
+
+    if (this.clients.length === this.maxClients) {
+      this.lock();
+      this.state.matchState = "PLAYING";
+      this.broadcast("GAME_START");
+    }
   }
 
   onLeave(client: Client) {
