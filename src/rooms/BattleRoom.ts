@@ -1,6 +1,9 @@
 import { Client, Room } from "colyseus";
 import { GameState } from "../schema/GameState";
 import { PlayerState } from "../schema/PlayerState";
+import jwt from "jsonwebtoken";
+
+const jwtSecret = process.env.JWT_SECRET || "supersecretkey";
 
 export class BattleRoom extends Room<{ state: GameState }> {
   onCreate() {
@@ -25,16 +28,31 @@ export class BattleRoom extends Room<{ state: GameState }> {
     });
   }
 
-  onJoin(client: Client) {
+  onAuth(client: Client, options: any) {
+    if (options.accessToken) {
+      try {
+        const decoded = jwt.verify(options.accessToken, jwtSecret) as { userId: string; username: string };
+        (client as any).username = decoded.username;
+        return true;
+      } catch (e) {
+        console.error("[BattleRoom] Invalid token");
+        return false;
+      }
+    }
+    return true; // allow guest if no token? maybe and handle username differently
+  }
+
+  onJoin(client: Client, options: any) {
     const player = new PlayerState();
     player.id = client.sessionId;
+    player.username = (client as any).username || options.username || `Guest_${client.sessionId.substring(0, 5)}`;
     player.x = 0;
     player.y = 0;
     player.z = 0;
     player.hp = 100;
 
     this.state.players.set(client.sessionId, player);
-    console.log(`[BattleRoom] Client joined: ${client.sessionId}`);
+    console.log(`[BattleRoom] Client joined: ${client.sessionId} (Username: ${player.username})`);
 
     if (this.clients.length === this.maxClients) {
       this.lock();
@@ -44,7 +62,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   onLeave(client: Client) {
+    const player = this.state.players.get(client.sessionId);
+    const username = player ? player.username : client.sessionId;
     this.state.players.delete(client.sessionId);
-    console.log(`[BattleRoom] Client left: ${client.sessionId}`);
+    console.log(`[BattleRoom] Client left: ${username}`);
   }
 }
