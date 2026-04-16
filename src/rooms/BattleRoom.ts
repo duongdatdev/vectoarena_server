@@ -1,4 +1,4 @@
-import { Client, Room } from "colyseus";
+import { Client, Room, CloseCode } from "colyseus";
 import { GameState } from "../schema/GameState";
 import { PlayerState } from "../schema/PlayerState";
 import jwt from "jsonwebtoken";
@@ -61,10 +61,25 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
-  onLeave(client: Client) {
+  async onLeave(client: Client, code?: number) {
     const player = this.state.players.get(client.sessionId);
-    const username = player ? player.username : client.sessionId;
+    if (!player) return;
+
+    const consented = (code === CloseCode.NORMAL_CLOSURE);
+
+    if (!consented) {
+      console.log(`[BattleRoom] Client unexpectedly left: ${player.username}. Waiting 15s for reconnection...`);
+      try {
+        await this.allowReconnection(client, 15);
+        console.log(`[BattleRoom] Client reconnected: ${player.username}`);
+        return;
+      } catch (e) {
+        console.log(`[BattleRoom] Client failed to reconnect in time: ${player.username}`);
+      }
+    }
+
+    const username = player.username;
     this.state.players.delete(client.sessionId);
-    console.log(`[BattleRoom] Client left: ${username}`);
+    console.log(`[BattleRoom] Client permanently left: ${username}`);
   }
 }
