@@ -11,6 +11,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.setState(new GameState());
     console.log("[BattleRoom] Room created");
 
+    const spawnPoints = [
+      { x: -10, y: 1, z: 0, rot: 90 },
+      { x: 10, y: 1, z: 0, rot: -90 }
+    ];
+
     this.onMessage("move", (client, data) => {
       if (this.state.matchState !== "PLAYING") return;
       const player = this.state.players.get(client.sessionId);
@@ -18,6 +23,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
         player.x = data.x;
         player.y = data.y;
         player.z = data.z;
+        player.rotation = data.rotation;
       }
     });
 
@@ -43,12 +49,21 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   onJoin(client: Client, options: any) {
+    const spawnPoints = [
+      { x: -10, y: 0.05, z: 0, rot: 90 },
+      { x: 10, y: 0.05, z: 0, rot: -90 }
+    ];
+
+    const playerIndex = this.clients.length - 1;
+    const spawnPoint = spawnPoints[playerIndex % spawnPoints.length];
+
     const player = new PlayerState();
     player.id = client.sessionId;
     player.username = (client as any).username || options.username || `Guest_${client.sessionId.substring(0, 5)}`;
-    player.x = 0;
-    player.y = 0;
-    player.z = 0;
+    player.x = spawnPoint.x;
+    player.y = spawnPoint.y;
+    player.z = spawnPoint.z;
+    player.rotation = spawnPoint.rot;
     player.hp = 100;
 
     this.state.players.set(client.sessionId, player);
@@ -81,5 +96,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const username = player.username;
     this.state.players.delete(client.sessionId);
     console.log(`[BattleRoom] Client permanently left: ${username}`);
+
+    if (this.state.matchState !== "PLAYING") {
+      this.unlock();
+      console.log(`[BattleRoom] Room unlocked since match hasn't started and a player left.`);
+    }
   }
 }
