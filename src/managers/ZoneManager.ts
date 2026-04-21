@@ -40,6 +40,7 @@ export class ZoneManager {
     }
 
     zone.timer += 0.1;
+    this.applyZoneDamage();
 
     if (zone.currentState === "WAITING") {
       if (zone.timer >= zone.waitTime) {
@@ -89,5 +90,27 @@ export class ZoneManager {
     const distance = Math.random() * maxOffset;
     zone.nextCenterX = zone.currentCenterX + Math.cos(angle) * distance;
     zone.nextCenterZ = zone.currentCenterZ + Math.sin(angle) * distance;
+  }
+
+  private applyZoneDamage() {
+    const zone = this.state.zone;
+    const damage = zone.currentDamagePerSecond * 0.1; // update loop is every 100ms
+
+    this.state.players.forEach((player, sessionId) => {
+      if (player.hp <= 0) return; // Player is already dead
+
+      const dx = player.x - zone.currentCenterX;
+      const dz = player.z - zone.currentCenterZ;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+
+      if (distance > zone.currentRadius) {
+        player.hp -= damage;
+        if (player.hp <= 0) {
+          player.hp = 0;
+          console.log(`[ZoneManager] Player ${player.username} (${sessionId}) died to the zone.`);
+          // TODO: Check if only 1 player remaining -> match ends
+        }
+      }
+    });
   }
 }

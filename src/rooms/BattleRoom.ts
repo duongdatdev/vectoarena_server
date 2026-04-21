@@ -32,6 +32,32 @@ export class BattleRoom extends Room<{ state: GameState }> {
       // Broadcast shoot event to other clients
       this.broadcast("shoot", { clientId: client.sessionId, ...data }, { except: client });
     });
+
+    this.onMessage("hit", (client, data) => {
+      if (this.state.matchState !== "PLAYING") return;
+      
+      const shooter = this.state.players.get(client.sessionId);
+      const target = this.state.players.get(data.targetId);
+
+      if (shooter && target && target.hp > 0) {
+        // Anticheat Distance Validation
+        const dx = shooter.x - target.x;
+        const dz = shooter.z - target.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        // 60 units is our max threshold.
+        if (distance <= 60) {
+          target.hp -= 10;
+          if (target.hp < 0) target.hp = 0;
+          
+          if (target.hp === 0) {
+             console.log(`[BattleRoom] Player ${target.username} died by ${shooter.username}.`);
+          }
+        } else {
+          console.warn(`[BattleRoom] Invalid hit from ${shooter.username} to ${target.username} due to distance: ${distance}`);
+        }
+      }
+    });
   }
 
   onAuth(client: Client, options: any) {
