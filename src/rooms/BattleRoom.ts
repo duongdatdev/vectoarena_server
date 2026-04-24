@@ -3,9 +3,19 @@ import { GameState } from "../schema/GameState";
 import { ZoneManager } from "../managers/ZoneManager";
 import { AuthManager } from "../managers/AuthManager";
 import { PlayerSpawner } from "../managers/PlayerSpawner";
+import { ItemSpawner } from "../managers/ItemSpawner";
 
 export class BattleRoom extends Room<{ state: GameState }> {
   private zoneManager!: ZoneManager;
+
+  private isFiniteNumber(value: unknown): value is number {
+    return typeof value === "number" && Number.isFinite(value);
+  }
+
+  private normalizeRotation(value: number): number {
+    const normalized = value % 360;
+    return normalized < 0 ? normalized + 360 : normalized;
+  }
 
   onCreate() {
     this.maxClients = 2;
@@ -16,28 +26,74 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.zoneManager.initializeZone();
     this.setSimulationInterval(() => this.zoneManager.updateZone(), 100);
 
+    ItemSpawner.spawnInitialItems(this.state, 20);
+
     this.onMessage("move", (client, data) => {
       if (this.state.matchState !== "PLAYING") return;
       const player = this.state.players.get(client.sessionId);
       if (player) {
-        player.x = data.x;
-        player.y = data.y;
-        player.z = data.z;
-        player.rotation = data.rotation;
+        const { x, y, z, rotation } = data ?? {};
+
+        if (
+          !this.isFiniteNumber(x) ||
+          !this.isFiniteNumber(y) ||
+          !this.isFiniteNumber(z) ||
+          !this.isFiniteNumber(rotation)
+        ) {
+          console.warn(`[BattleRoom] Ignoring invalid move payload from ${client.sessionId}`);
+          return;
+        }
+
+        player.x = x;
+        player.y = y;
+        player.z = z;
+        player.rotation = this.normalizeRotation(rotation);
       }
     });
 
     this.onMessage("shoot", (client, data) => {
       if (this.state.matchState !== "PLAYING") return;
+
+      const { x, y, z, rx, ry, rz } = data ?? {};
+      if (
+        !this.isFiniteNumber(x) ||
+        !this.isFiniteNumber(y) ||
+        !this.isFiniteNumber(z) ||
+        !this.isFiniteNumber(rx) ||
+        !this.isFiniteNumber(ry) ||
+        !this.isFiniteNumber(rz)
+      ) {
+        console.warn(`[BattleRoom] Ignoring invalid shoot payload from ${client.sessionId}`);
+        return;
+      }
+
       // Broadcast shoot event to other clients
-      this.broadcast("shoot", { clientId: client.sessionId, ...data }, { except: client });
+      this.broadcast(
+        "shoot",
+        {
+          clientId: client.sessionId,
+          x,
+          y,
+          z,
+          rx: this.normalizeRotation(rx),
+          ry: this.normalizeRotation(ry),
+          rz: this.normalizeRotation(rz),
+        },
+        { except: client }
+      );
     });
 
     this.onMessage("hit", (client, data) => {
       if (this.state.matchState !== "PLAYING") return;
+
+      const targetId = data?.targetId;
+      if (typeof targetId !== "string" || targetId.length === 0) {
+        console.warn(`[BattleRoom] Ignoring invalid hit payload from ${client.sessionId}`);
+        return;
+      }
       
       const shooter = this.state.players.get(client.sessionId);
-      const target = this.state.players.get(data.targetId);
+      const target = this.state.players.get(targetId);
 
       if (shooter && target && target.hp > 0) {
         // Anticheat Distance Validation
