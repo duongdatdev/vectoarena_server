@@ -2,12 +2,13 @@ import { GameState } from "../schema/GameState";
 import { ItemState } from "../schema/ItemState";
 
 export class ItemSpawner {
+  private static readonly ITEM_TYPES = ["Rifle", "Shotgun", "MedicalKit"];
+
   private static generateRandomId(seed: number): string {
     return `${Date.now().toString(36)}_${seed.toString(36)}_${Math.random().toString(36).substring(2, 9)}`;
   }
 
   public static spawnInitialItems(state: GameState, count: number = 20) {
-    const itemTypes = ["Rifle", "Shotgun"];
     let spawned = 0;
     let seed = 0;
 
@@ -19,7 +20,7 @@ export class ItemSpawner {
           continue;
         }
 
-        item.type = itemTypes[Math.floor(Math.random() * itemTypes.length)];
+        item.type = this.ITEM_TYPES[Math.floor(Math.random() * this.ITEM_TYPES.length)];
         
         // x -47.5 to 47.7
         item.x = -47.5 + Math.random() * (47.7 - (-47.5));

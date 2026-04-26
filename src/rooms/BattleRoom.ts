@@ -8,6 +8,8 @@ import { ItemSpawner } from "../managers/ItemSpawner";
 export class BattleRoom extends Room<{ state: GameState }> {
   private zoneManager!: ZoneManager;
   private static readonly MAX_ITEM_PICKUP_DISTANCE = 3;
+  private static readonly MAX_PLAYER_HP = 100;
+  private static readonly MEDICAL_KIT_HEAL = 30;
 
   private isFiniteNumber(value: unknown): value is number {
     return typeof value === "number" && Number.isFinite(value);
@@ -193,6 +195,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
           `[BattleRoom] Invalid pickup_item from ${player.username} for ${itemId} due to distance: ${distance}`
         );
         return;
+      }
+
+      if (item.type === "MedicalKit") {
+        player.hp = Math.min(player.hp + BattleRoom.MEDICAL_KIT_HEAL, BattleRoom.MAX_PLAYER_HP);
       }
 
       this.state.items.delete(itemId);
