@@ -7,6 +7,7 @@ import { ItemSpawner } from "../managers/ItemSpawner";
 
 export class BattleRoom extends Room<{ state: GameState }> {
   private zoneManager!: ZoneManager;
+  private static readonly MAX_ITEM_PICKUP_DISTANCE = 3;
 
   private isFiniteNumber(value: unknown): value is number {
     return typeof value === "number" && Number.isFinite(value);
@@ -15,6 +16,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private normalizeRotation(value: number): number {
     const normalized = value % 360;
     return normalized < 0 ? normalized + 360 : normalized;
+  }
+
+  private clamp01(value: number): number {
+    if (value < 0) return 0;
+    if (value > 1) return 1;
+    return value;
   }
 
   onCreate() {
@@ -96,7 +103,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const target = this.state.players.get(targetId);
 
       if (shooter && target && target.hp > 0) {
-        // Anticheat Distance Validation
+        // anticheat Distance Validation
         const dx = shooter.x - target.x;
         const dz = shooter.z - target.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
@@ -113,6 +120,87 @@ export class BattleRoom extends Room<{ state: GameState }> {
           console.warn(`[BattleRoom] Invalid hit from ${shooter.username} to ${target.username} due to distance: ${distance}`);
         }
       }
+    });
+
+    this.onMessage("pickup_progress", (client, data) => {
+      if (this.state.matchState !== "PLAYING") return;
+
+      const itemId = data?.itemId;
+      const progress = data?.progress;
+
+      if (typeof itemId !== "string" || itemId.length === 0 || !this.isFiniteNumber(progress)) {
+        console.warn(`[BattleRoom] Ignoring invalid pickup_progress payload from ${client.sessionId}`);
+        return;
+      }
+
+      const player = this.state.players.get(client.sessionId);
+      const item = this.state.items.get(itemId);
+      if (!player || !item) {
+        return;
+      }
+
+      const dx = player.x - item.x;
+      const dz = player.z - item.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+
+      if (distance > BattleRoom.MAX_ITEM_PICKUP_DISTANCE) {
+        if (item.pickupBy === client.sessionId) {
+          item.pickupBy = "";
+          item.pickupProgress = 0;
+        }
+        return;
+      }
+
+      const normalizedProgress = this.clamp01(progress);
+      if (normalizedProgress <= 0) {
+        if (item.pickupBy === client.sessionId) {
+          item.pickupBy = "";
+          item.pickupProgress = 0;
+        }
+        return;
+      }
+
+      if (item.pickupBy.length > 0 && item.pickupBy !== client.sessionId) {
+        return;
+      }
+
+      item.pickupBy = client.sessionId;
+      item.pickupProgress = normalizedProgress;
+    });
+
+    this.onMessage("pickup_item", (client, data) => {
+      if (this.state.matchState !== "PLAYING") return;
+
+      const itemId = data?.itemId;
+      if (typeof itemId !== "string" || itemId.length === 0) {
+        console.warn(`[BattleRoom] Ignoring invalid pickup_item payload from ${client.sessionId}`);
+        return;
+      }
+
+      const player = this.state.players.get(client.sessionId);
+      const item = this.state.items.get(itemId);
+
+      if (!player || !item) {
+        return;
+      }
+
+      const dx = player.x - item.x;
+      const dz = player.z - item.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+
+      if (distance > BattleRoom.MAX_ITEM_PICKUP_DISTANCE) {
+        console.warn(
+          `[BattleRoom] Invalid pickup_item from ${player.username} for ${itemId} due to distance: ${distance}`
+        );
+        return;
+      }
+
+      this.state.items.delete(itemId);
+      this.broadcast("item_picked", {
+        playerId: client.sessionId,
+        itemId,
+        itemType: item.type,
+      });
     });
   }
 
