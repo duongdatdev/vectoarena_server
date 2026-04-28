@@ -7,7 +7,11 @@
     "dev": "ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "db:migrate": "prisma migrate dev --name redesign_full_game_schema",
+    "db:generate": "prisma generate",
+    "db:seed": "ts-node prisma/seed.ts",
+    "db:setup": "npm run db:migrate && npm run db:generate && npm run db:seed"
   },
   "keywords": [],
   "author": "",

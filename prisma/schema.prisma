@@ -7,8 +7,213 @@ datasource db {
 }
 
 model User {
-  id         String  @id @default(uuid())
-  username   String  @unique
-  password   String
-  vecBalance Float   @default(0)
+  id             String                @id @default(uuid()) @db.Uuid
+  username       String                @unique @db.VarChar(32)
+  password       String                @db.VarChar(255)
+  displayName    String?               @db.VarChar(64)
+  vecBalance     Int                   @default(0)
+  walletAddress  String?               @db.VarChar(64)
+  level          Int                   @default(1)
+  xp             Int                   @default(0)
+  totalMatches   Int                   @default(0)
+  totalWins      Int                   @default(0)
+  totalKills     Int                   @default(0)
+  totalDeaths    Int                   @default(0)
+  totalDamage    Int                   @default(0)
+  bestPlacement  Int?
+  lastLoginAt    DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  sessions       UserSession[]
+  loadout        UserLoadout?
+  currencyEvents CurrencyTransaction[]
+  participation  MatchParticipant[]
+  skinInventory  SkinInventory[]
+
+  @@index([createdAt])
+}
+
+model UserSession {
+  id           String          @id @default(uuid()) @db.Uuid
+  userId       String          @db.Uuid
+  refreshToken String          @unique @db.VarChar(255)
+  platform     SessionPlatform @default(UNKNOWN)
+  ipAddress    String?         @db.VarChar(64)
+  userAgent    String?         @db.VarChar(255)
+  expiresAt    DateTime
+  createdAt    DateTime        @default(now())
+  revokedAt    DateTime?
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model UserLoadout {
+  id                 String   @id @default(uuid()) @db.Uuid
+  userId             String   @unique @db.Uuid
+  equippedWeaponSkin String?  @db.VarChar(64)
+  equippedPlayerSkin String?  @db.VarChar(64)
+  updatedAt          DateTime @updatedAt
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Match {
+  id              String             @id @default(uuid()) @db.Uuid
+  roomCode        String             @unique @db.VarChar(64)
+  mode            String             @default("BATTLE") @db.VarChar(32)
+  status          MatchStatus        @default(WAITING)
+  maxPlayers      Int                @default(2)
+  startedAt       DateTime?
+  endedAt         DateTime?
+  durationSeconds Int?
+  zoneConfig      Json?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  participants    MatchParticipant[]
+  killEvents      KillEvent[]
+
+  @@index([status, createdAt])
+}
+
+model MatchParticipant {
+  id               String      @id @default(uuid()) @db.Uuid
+  matchId          String      @db.Uuid
+  userId           String?     @db.Uuid
+  sessionId        String      @db.VarChar(64)
+  usernameSnapshot String      @db.VarChar(64)
+  joinAt           DateTime    @default(now())
+  leaveAt          DateTime?
+  placement        Int?
+  kills            Int         @default(0)
+  deaths           Int         @default(0)
+  damageDealt      Int         @default(0)
+  damageTaken      Int         @default(0)
+  vecCollected     Int         @default(0)
+  vecDropped       Int         @default(0)
+  vecCarried       Int         @default(0)
+  rewardVec        Int         @default(0)
+  rewardXp         Int         @default(0)
+  survivedSeconds  Int?
+  isWinner         Boolean     @default(false)
+  match            Match       @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  user             User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  killsDone        KillEvent[] @relation("KillBy")
+  deathsTaken      KillEvent[] @relation("DeathOf")
+
+  @@unique([matchId, sessionId])
+  @@index([userId, joinAt])
+}
+
+model KillEvent {
+  id                  String            @id @default(uuid()) @db.Uuid
+  matchId             String            @db.Uuid
+  killerParticipantId String?           @db.Uuid
+  victimParticipantId String            @db.Uuid
+  damage              Int               @default(10)
+  weapon              WeaponType?
+  deathCause          DeathCause        @default(PLAYER)
+  x                   Float?
+  y                   Float?
+  z                   Float?
+  happenedAt          DateTime          @default(now())
+  killer              MatchParticipant? @relation("KillBy", fields: [killerParticipantId], references: [id], onDelete: SetNull)
+  victim              MatchParticipant  @relation("DeathOf", fields: [victimParticipantId], references: [id], onDelete: Cascade)
+  match               Match             @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@index([matchId, happenedAt])
+}
+
+model CurrencyTransaction {
+  id              String            @id @default(uuid()) @db.Uuid
+  userId          String            @db.Uuid
+  type            TransactionType
+  amount          Int
+  balanceBefore   Int
+  balanceAfter    Int
+  status          TransactionStatus @default(OFFCHAIN_ONLY)
+  txHash          String?           @db.VarChar(128)
+  chainId         Int?
+  contractAddress String?           @db.VarChar(64)
+  referenceId     String?           @db.VarChar(64)
+  note            String?           @db.VarChar(255)
+  createdAt       DateTime          @default(now())
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([status, createdAt])
+}
+
+model SkinInventory {
+  id         String     @id @default(uuid()) @db.Uuid
+  userId     String     @db.Uuid
+  skinCode   String     @db.VarChar(64)
+  skinType   SkinType
+  source     SkinSource @default(SHOP)
+  unlockedAt DateTime   @default(now())
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, skinCode])
+  @@index([userId, skinType])
+}
+
+enum MatchStatus {
+  WAITING
+  PLAYING
+  FINISHED
+  ABANDONED
+}
+
+enum ItemType {
+  RIFLE
+  SHOTGUN
+  MEDICAL_KIT
+  VEC
+  AIRDROP
+}
+
+enum WeaponType {
+  RIFLE
+  SHOTGUN
+  FIST
+}
+
+enum TransactionType {
+  MATCH_REWARD
+  PURCHASE
+  REFUND
+  ADMIN_ADJUSTMENT
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  OFFCHAIN_ONLY
+}
+
+enum SkinType {
+  WEAPON
+  PLAYER
+}
+
+enum SkinSource {
+  SHOP
+  REWARD
+  ADMIN
+}
+
+enum DeathCause {
+  PLAYER
+  ZONE
+  DISCONNECT
+  SYSTEM
+}
+
+enum SessionPlatform {
+  WINDOWS
+  ANDROID
+  IOS
+  WEB
+  UNKNOWN
 }
