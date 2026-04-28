@@ -4,12 +4,140 @@ import { ZoneManager } from "../managers/ZoneManager";
 import { AuthManager } from "../managers/AuthManager";
 import { PlayerSpawner } from "../managers/PlayerSpawner";
 import { ItemSpawner } from "../managers/ItemSpawner";
+import { ConfigService } from "../managers/ConfigService";
+import prisma from "../database/prisma";
 
 export class BattleRoom extends Room<{ state: GameState }> {
   private zoneManager!: ZoneManager;
-  private static readonly MAX_ITEM_PICKUP_DISTANCE = 3;
   private static readonly MAX_PLAYER_HP = 100;
-  private static readonly MEDICAL_KIT_HEAL = 30;
+  private maxItemPickupDistance = 3;
+  private medicalKitHeal = 30;
+  private maxHitDistance = 60;
+  private reconnectTimeoutSeconds = 15;
+  private hitDamage = 10;
+  private matchRecordId: string | null = null;
+  private participantBySessionId = new Map<string, string>();
+
+  private async createMatchRecord(): Promise<void> {
+    try {
+      const match = await (prisma as any).match.create({
+        data: {
+          roomCode: this.roomId,
+          mode: "BATTLE",
+          status: "WAITING",
+          maxPlayers: this.maxClients,
+        },
+      });
+      this.matchRecordId = match.id;
+    } catch (error) {
+      console.error("[BattleRoom] Failed to create match record:", error);
+    }
+  }
+
+  private async setMatchPlaying(): Promise<void> {
+    if (!this.matchRecordId) return;
+    try {
+      await (prisma as any).match.update({
+        where: { id: this.matchRecordId },
+        data: {
+          status: "PLAYING",
+          startedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      console.error("[BattleRoom] Failed to set match status PLAYING:", error);
+    }
+  }
+
+  private async finalizeMatch(status: "FINISHED" | "ABANDONED"): Promise<void> {
+    if (!this.matchRecordId) return;
+    try {
+      await (prisma as any).match.update({
+        where: { id: this.matchRecordId },
+        data: {
+          status,
+          endedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      console.error("[BattleRoom] Failed to finalize match:", error);
+    }
+  }
+
+  private async createParticipantRecord(client: Client, username: string): Promise<void> {
+    if (!this.matchRecordId) return;
+    try {
+      const userId = (client as any).userId as string | undefined;
+      const participant = await (prisma as any).matchParticipant.create({
+        data: {
+          matchId: this.matchRecordId,
+          userId: userId ?? null,
+          sessionId: client.sessionId,
+          usernameSnapshot: username,
+        },
+      });
+      this.participantBySessionId.set(client.sessionId, participant.id);
+    } catch (error) {
+      console.error("[BattleRoom] Failed to create match participant:", error);
+    }
+  }
+
+  private async markParticipantLeft(sessionId: string): Promise<void> {
+    const participantId = this.participantBySessionId.get(sessionId);
+    if (!participantId) return;
+
+    try {
+      await (prisma as any).matchParticipant.update({
+        where: { id: participantId },
+        data: {
+          leaveAt: new Date(),
+        },
+      });
+    } catch (error) {
+      console.error("[BattleRoom] Failed to mark participant left:", error);
+    }
+  }
+
+  private async recordKillEvent(killerSessionId: string, victimSessionId: string): Promise<void> {
+    if (!this.matchRecordId) return;
+
+    const killerParticipantId = this.participantBySessionId.get(killerSessionId) ?? null;
+    const victimParticipantId = this.participantBySessionId.get(victimSessionId);
+    if (!victimParticipantId) return;
+
+    try {
+      await (prisma as any).killEvent.create({
+        data: {
+          matchId: this.matchRecordId,
+          killerParticipantId,
+          victimParticipantId,
+          damage: this.hitDamage,
+          weapon: "RIFLE",
+          deathCause: "PLAYER",
+        },
+      });
+
+      if (killerParticipantId) {
+        await (prisma as any).matchParticipant.update({
+          where: { id: killerParticipantId },
+          data: {
+            kills: { increment: 1 },
+            damageDealt: { increment: this.hitDamage },
+          },
+        });
+      }
+
+      await (prisma as any).matchParticipant.update({
+        where: { id: victimParticipantId },
+        data: {
+          deaths: { increment: 1 },
+          damageTaken: { increment: this.hitDamage },
+        },
+      });
+    } catch (error) {
+      console.error("[BattleRoom] Failed to record kill event:", error);
+    }
+  }
 
   private isFiniteNumber(value: unknown): value is number {
     return typeof value === "number" && Number.isFinite(value);
@@ -26,16 +154,27 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return value;
   }
 
-  onCreate() {
-    this.maxClients = 2;
+  async onCreate() {
+    const runtimeConfig = await ConfigService.loadActiveConfig();
+
+    this.maxClients = runtimeConfig.maxPlayers;
+    this.maxItemPickupDistance = runtimeConfig.maxItemPickupDistance;
+    this.medicalKitHeal = runtimeConfig.medicalKitHeal;
+    this.maxHitDistance = runtimeConfig.maxHitDistance;
+    this.reconnectTimeoutSeconds = runtimeConfig.reconnectTimeoutSeconds;
+    this.hitDamage = runtimeConfig.rifleDamage;
+
     this.setState(new GameState());
-    console.log("[BattleRoom] Room created");
+    console.log(
+      `[BattleRoom] Room created with config ${runtimeConfig.profileCode} (maxPlayers=${this.maxClients}, spawn=${runtimeConfig.initialSpawnCount})`
+    );
 
     this.zoneManager = new ZoneManager(this.state);
     this.zoneManager.initializeZone();
     this.setSimulationInterval(() => this.zoneManager.updateZone(), 100);
 
-    ItemSpawner.spawnInitialItems(this.state, 20);
+    ItemSpawner.spawnInitialItems(this.state, runtimeConfig.initialSpawnCount, runtimeConfig.itemSpawnWeights);
+    void this.createMatchRecord();
 
     this.onMessage("move", (client, data) => {
       if (this.state.matchState !== "PLAYING") return;
@@ -110,13 +249,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
         const dz = shooter.z - target.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
         
-        // 60 units is our max threshold.
-        if (distance <= 60) {
-          target.hp -= 10;
+        if (distance <= this.maxHitDistance) {
+          target.hp -= this.hitDamage;
           if (target.hp < 0) target.hp = 0;
           
           if (target.hp === 0) {
              console.log(`[BattleRoom] Player ${target.username} died by ${shooter.username}.`);
+             void this.recordKillEvent(client.sessionId, targetId);
           }
         } else {
           console.warn(`[BattleRoom] Invalid hit from ${shooter.username} to ${target.username} due to distance: ${distance}`);
@@ -145,7 +284,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const dz = player.z - item.z;
       const distance = Math.sqrt(dx * dx + dz * dz);
 
-      if (distance > BattleRoom.MAX_ITEM_PICKUP_DISTANCE) {
+      if (distance > this.maxItemPickupDistance) {
         if (item.pickupBy === client.sessionId) {
           item.pickupBy = "";
           item.pickupProgress = 0;
@@ -190,7 +329,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const dz = player.z - item.z;
       const distance = Math.sqrt(dx * dx + dz * dz);
 
-      if (distance > BattleRoom.MAX_ITEM_PICKUP_DISTANCE) {
+      if (distance > this.maxItemPickupDistance) {
         console.warn(
           `[BattleRoom] Invalid pickup_item from ${player.username} for ${itemId} due to distance: ${distance}`
         );
@@ -198,7 +337,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
 
       if (item.type === "MedicalKit") {
-        player.hp = Math.min(player.hp + BattleRoom.MEDICAL_KIT_HEAL, BattleRoom.MAX_PLAYER_HP);
+        player.hp = Math.min(player.hp + this.medicalKitHeal, BattleRoom.MAX_PLAYER_HP);
       }
 
       this.state.items.delete(itemId);
@@ -215,6 +354,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const decoded = AuthManager.verifyToken(options.accessToken);
       if (decoded) {
         (client as any).username = decoded.username;
+        (client as any).userId = decoded.userId;
         return true;
       } else {
         console.error("[BattleRoom] Invalid token");
@@ -227,6 +367,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   onJoin(client: Client, options: any) {
     const player = PlayerSpawner.createPlayer(client, options, this.clients.length);
     this.state.players.set(client.sessionId, player);
+    void this.createParticipantRecord(client, player.username);
     
     console.log(`[BattleRoom] Client joined: ${client.sessionId} (Username: ${player.username})`);
 
@@ -234,6 +375,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       this.lock();
       this.state.matchState = "PLAYING";
       this.broadcast("GAME_START");
+      void this.setMatchPlaying();
     }
   }
 
@@ -246,7 +388,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (!consented) {
       console.log(`[BattleRoom] Client unexpectedly left: ${player.username}. Waiting 15s for reconnection...`);
       try {
-        await this.allowReconnection(client, 15);
+        await this.allowReconnection(client, this.reconnectTimeoutSeconds);
         console.log(`[BattleRoom] Client reconnected: ${player.username}`);
         return;
       } catch (e) {
@@ -256,7 +398,14 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     const username = player.username;
     this.state.players.delete(client.sessionId);
+    void this.markParticipantLeft(client.sessionId);
+    this.participantBySessionId.delete(client.sessionId);
     console.log(`[BattleRoom] Client permanently left: ${username}`);
+
+    if (this.state.players.size === 0) {
+      const finalStatus = this.state.matchState === "PLAYING" ? "FINISHED" : "ABANDONED";
+      void this.finalizeMatch(finalStatus);
+    }
 
     if (this.state.matchState !== "PLAYING") {
       this.unlock();

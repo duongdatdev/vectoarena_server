@@ -1,5 +1,6 @@
 import { GameState } from "../schema/GameState";
 import { ItemState } from "../schema/ItemState";
+import { ItemSpawnWeights } from "./ConfigService";
 
 export class ItemSpawner {
   private static readonly ITEM_TYPES = ["Rifle", "Shotgun", "MedicalKit"];
@@ -8,7 +9,34 @@ export class ItemSpawner {
     return `${Date.now().toString(36)}_${seed.toString(36)}_${Math.random().toString(36).substring(2, 9)}`;
   }
 
-  public static spawnInitialItems(state: GameState, count: number = 20) {
+  private static pickRandomItemType(weights?: ItemSpawnWeights): string {
+    if (!weights) {
+      return this.ITEM_TYPES[Math.floor(Math.random() * this.ITEM_TYPES.length)];
+    }
+
+    const weightedPool: Array<{ type: string; weight: number }> = [
+      { type: "Rifle", weight: Math.max(0, weights.Rifle) },
+      { type: "Shotgun", weight: Math.max(0, weights.Shotgun) },
+      { type: "MedicalKit", weight: Math.max(0, weights.MedicalKit) },
+    ];
+
+    const totalWeight = weightedPool.reduce((sum, item) => sum + item.weight, 0);
+    if (totalWeight <= 0) {
+      return this.ITEM_TYPES[Math.floor(Math.random() * this.ITEM_TYPES.length)];
+    }
+
+    let roll = Math.random() * totalWeight;
+    for (const item of weightedPool) {
+      roll -= item.weight;
+      if (roll <= 0) {
+        return item.type;
+      }
+    }
+
+    return weightedPool[weightedPool.length - 1].type;
+  }
+
+  public static spawnInitialItems(state: GameState, count: number = 20, weights?: ItemSpawnWeights) {
     let spawned = 0;
     let seed = 0;
 
@@ -20,7 +48,7 @@ export class ItemSpawner {
           continue;
         }
 
-        item.type = this.ITEM_TYPES[Math.floor(Math.random() * this.ITEM_TYPES.length)];
+        item.type = this.pickRandomItemType(weights);
         
         // x -47.5 to 47.7
         item.x = -47.5 + Math.random() * (47.7 - (-47.5));
