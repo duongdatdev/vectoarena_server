@@ -1,0 +1,15 @@
+{
+  "profileCode": "default_json_v1",
+  "maxPlayers": 2,
+  "initialSpawnCount": 20,
+  "maxHitDistance": 60,
+  "maxItemPickupDistance": 3,
+  "medicalKitHeal": 30,
+  "reconnectTimeoutSeconds": 15,
+  "rifleDamage": 10,
+  "itemSpawnWeights": {
+    "Rifle": 3,
+    "Shotgun": 2,
+    "MedicalKit": 2
+  }
+}
