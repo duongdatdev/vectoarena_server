@@ -7,6 +7,17 @@ export type ItemSpawnWeights = {
   MedicalKit: number;
 };
 
+export type WeaponConfig = {
+  damage: number;
+  fireRatePerSecond: number;
+  maxAmmo: number;
+};
+
+export type WeaponConfigs = {
+  Rifle: WeaponConfig;
+  Shotgun: WeaponConfig;
+};
+
 export type RuntimeGameConfig = {
   profileCode: string;
   maxPlayers: number;
@@ -15,7 +26,7 @@ export type RuntimeGameConfig = {
   maxItemPickupDistance: number;
   medicalKitHeal: number;
   reconnectTimeoutSeconds: number;
-  rifleDamage: number;
+  weapons: WeaponConfigs;
   itemSpawnWeights: ItemSpawnWeights;
 };
 
@@ -34,7 +45,18 @@ export class ConfigService {
       maxItemPickupDistance: 3,
       medicalKitHeal: 30,
       reconnectTimeoutSeconds: 15,
-      rifleDamage: 10,
+      weapons: {
+        Rifle: {
+          damage: 10,
+          fireRatePerSecond: 10,
+          maxAmmo: 30,
+        },
+        Shotgun: {
+          damage: 25,
+          fireRatePerSecond: 1.5,
+          maxAmmo: 8,
+        },
+      },
       itemSpawnWeights: {
         Rifle: 1,
         Shotgun: 1,
@@ -95,8 +117,9 @@ export class ConfigService {
       if (this.isPositiveInteger(fileConfig.reconnectTimeoutSeconds)) {
         config.reconnectTimeoutSeconds = fileConfig.reconnectTimeoutSeconds;
       }
-      if (this.isPositiveInteger(fileConfig.rifleDamage)) {
-        config.rifleDamage = fileConfig.rifleDamage;
+      if (fileConfig.weapons) {
+        this.mergeWeaponConfig(config.weapons.Rifle, fileConfig.weapons.Rifle);
+        this.mergeWeaponConfig(config.weapons.Shotgun, fileConfig.weapons.Shotgun);
       }
       if (fileConfig.itemSpawnWeights) {
         const weights = fileConfig.itemSpawnWeights;
@@ -110,5 +133,19 @@ export class ConfigService {
     this.cacheExpiresAt = now + this.CACHE_TTL_MS;
 
     return config;
+  }
+
+  private static mergeWeaponConfig(target: WeaponConfig, source?: Partial<WeaponConfig>): void {
+    if (!source) return;
+
+    if (this.isPositiveInteger(source.damage)) {
+      target.damage = source.damage;
+    }
+    if (this.isPositiveNumber(source.fireRatePerSecond)) {
+      target.fireRatePerSecond = source.fireRatePerSecond;
+    }
+    if (this.isPositiveInteger(source.maxAmmo)) {
+      target.maxAmmo = source.maxAmmo;
+    }
   }
 }

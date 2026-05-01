@@ -2,6 +2,8 @@ import { Client } from "colyseus";
 import { PlayerState } from "../schema/PlayerState";
 
 export class PlayerSpawner {
+  public static readonly DEFAULT_MELEE_WEAPON = "Sword";
+
   private static readonly spawnPoints = [
     { x: -10, y: 0.05, z: 0, rot: 90 },
     { x: 10, y: 0.05, z: 0, rot: -90 }
@@ -19,6 +21,10 @@ export class PlayerSpawner {
     player.z = spawnPoint.z;
     player.rotation = spawnPoint.rot;
     player.hp = 100;
+    player.currentWeapon = this.DEFAULT_MELEE_WEAPON;
+    player.meleeWeapon = this.DEFAULT_MELEE_WEAPON;
+    player.rangedWeapon = "";
+    player.ammo = 0;
 
     return player;
   }

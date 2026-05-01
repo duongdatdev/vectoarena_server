@@ -8,4 +8,8 @@ export class PlayerState extends Schema {
   @type("number") z!: number;
   @type("number") rotation!: number;
   @type("number") hp!: number;
+  @type("string") currentWeapon: string = "";
+  @type("number") ammo: number = 0;
+  @type("string") meleeWeapon: string = "";
+  @type("string") rangedWeapon: string = "";
 }

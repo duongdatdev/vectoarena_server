@@ -4,17 +4,37 @@ import { ZoneManager } from "../managers/ZoneManager";
 import { AuthManager } from "../managers/AuthManager";
 import { PlayerSpawner } from "../managers/PlayerSpawner";
 import { ItemSpawner } from "../managers/ItemSpawner";
-import { ConfigService } from "../managers/ConfigService";
+import { ConfigService, WeaponConfig, WeaponConfigs } from "../managers/ConfigService";
 import prisma from "../database/prisma";
 
+type WeaponType = keyof WeaponConfigs;
+
 export class BattleRoom extends Room<{ state: GameState }> {
+  private static readonly DEFAULT_MELEE_WEAPON = "Sword";
   private zoneManager!: ZoneManager;
   private static readonly MAX_PLAYER_HP = 100;
+  private static readonly ACCEPTED_SHOT_TTL_MS = 2_000;
+  private static readonly MELEE_DAMAGE = 35;
+  private static readonly MELEE_RANGE = 2.75;
+  private static readonly MELEE_COOLDOWN_MS = 700;
   private maxItemPickupDistance = 3;
   private medicalKitHeal = 30;
   private maxHitDistance = 60;
   private reconnectTimeoutSeconds = 15;
-  private hitDamage = 10;
+  private weaponConfigs: WeaponConfigs = {
+    Rifle: {
+      damage: 10,
+      fireRatePerSecond: 10,
+      maxAmmo: 30,
+    },
+    Shotgun: {
+      damage: 25,
+      fireRatePerSecond: 1.5,
+      maxAmmo: 8,
+    },
+  };
+  private lastShootAtBySessionId = new Map<string, number>();
+  private acceptedShotsBySessionId = new Map<string, number[]>();
   private matchRecordId: string | null = null;
   private participantBySessionId = new Map<string, string>();
 
@@ -98,7 +118,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
-  private async recordKillEvent(killerSessionId: string, victimSessionId: string): Promise<void> {
+  private async recordKillEvent(
+    killerSessionId: string,
+    victimSessionId: string,
+    damage: number,
+    weapon: string
+  ): Promise<void> {
     if (!this.matchRecordId) return;
 
     const killerParticipantId = this.participantBySessionId.get(killerSessionId) ?? null;
@@ -111,8 +136,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
           matchId: this.matchRecordId,
           killerParticipantId,
           victimParticipantId,
-          damage: this.hitDamage,
-          weapon: "RIFLE",
+          damage,
+          weapon: weapon.toUpperCase(),
           deathCause: "PLAYER",
         },
       });
@@ -122,7 +147,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
           where: { id: killerParticipantId },
           data: {
             kills: { increment: 1 },
-            damageDealt: { increment: this.hitDamage },
+            damageDealt: { increment: damage },
           },
         });
       }
@@ -131,7 +156,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
         where: { id: victimParticipantId },
         data: {
           deaths: { increment: 1 },
-          damageTaken: { increment: this.hitDamage },
+          damageTaken: { increment: damage },
         },
       });
     } catch (error) {
@@ -154,6 +179,63 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return value;
   }
 
+  private getWeaponConfig(weaponType: string): WeaponConfig | null {
+    if (weaponType === "Rifle" || weaponType === "Shotgun") {
+      return this.weaponConfigs[weaponType];
+    }
+
+    return null;
+  }
+
+  private isMeleeWeapon(weaponType: string): boolean {
+    return weaponType === BattleRoom.DEFAULT_MELEE_WEAPON;
+  }
+
+  private canProcessAction(sessionId: string, cooldownMs: number): boolean {
+    const now = Date.now();
+    const lastShotAt = this.lastShootAtBySessionId.get(sessionId) ?? 0;
+
+    if (now - lastShotAt < cooldownMs) {
+      return false;
+    }
+
+    this.lastShootAtBySessionId.set(sessionId, now);
+    return true;
+  }
+
+  private canProcessShot(sessionId: string, weaponConfig: WeaponConfig): boolean {
+    return this.canProcessAction(sessionId, 1000 / weaponConfig.fireRatePerSecond);
+  }
+
+  private trackAcceptedShot(sessionId: string): void {
+    const now = Date.now();
+    const acceptedShots = this.getRecentAcceptedShots(sessionId, now);
+    acceptedShots.push(now);
+    this.acceptedShotsBySessionId.set(sessionId, acceptedShots);
+  }
+
+  private consumeAcceptedShot(sessionId: string): boolean {
+    const acceptedShots = this.getRecentAcceptedShots(sessionId, Date.now());
+    if (acceptedShots.length === 0) {
+      this.acceptedShotsBySessionId.delete(sessionId);
+      return false;
+    }
+
+    acceptedShots.shift();
+    if (acceptedShots.length === 0) {
+      this.acceptedShotsBySessionId.delete(sessionId);
+    } else {
+      this.acceptedShotsBySessionId.set(sessionId, acceptedShots);
+    }
+
+    return true;
+  }
+
+  private getRecentAcceptedShots(sessionId: string, now: number): number[] {
+    const acceptedShots = this.acceptedShotsBySessionId.get(sessionId) ?? [];
+    return acceptedShots.filter((shotAt) => now - shotAt <= BattleRoom.ACCEPTED_SHOT_TTL_MS);
+  }
+
   async onCreate() {
     const runtimeConfig = await ConfigService.loadActiveConfig();
 
@@ -162,7 +244,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.medicalKitHeal = runtimeConfig.medicalKitHeal;
     this.maxHitDistance = runtimeConfig.maxHitDistance;
     this.reconnectTimeoutSeconds = runtimeConfig.reconnectTimeoutSeconds;
-    this.hitDamage = runtimeConfig.rifleDamage;
+    this.weaponConfigs = runtimeConfig.weapons;
 
     this.setState(new GameState());
     console.log(
@@ -202,6 +284,14 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.onMessage("shoot", (client, data) => {
       if (this.state.matchState !== "PLAYING") return;
 
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+      if (player.currentWeapon !== player.rangedWeapon || player.rangedWeapon.length === 0) return;
+
+      const weaponConfig = this.getWeaponConfig(player.currentWeapon);
+      if (!weaponConfig || player.ammo <= 0) return;
+      if (!this.canProcessShot(client.sessionId, weaponConfig)) return;
+
       const { x, y, z, rx, ry, rz } = data ?? {};
       if (
         !this.isFiniteNumber(x) ||
@@ -214,6 +304,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
         console.warn(`[BattleRoom] Ignoring invalid shoot payload from ${client.sessionId}`);
         return;
       }
+
+      player.ammo = Math.max(0, player.ammo - 1);
+      this.trackAcceptedShot(client.sessionId);
 
       // Broadcast shoot event to other clients
       this.broadcast(
@@ -231,6 +324,62 @@ export class BattleRoom extends Room<{ state: GameState }> {
       );
     });
 
+    this.onMessage("switch_weapon", (client, data) => {
+      if (this.state.matchState !== "PLAYING") return;
+
+      const slot = data?.slot;
+      if (slot !== "melee" && slot !== "ranged") {
+        console.warn(`[BattleRoom] Ignoring invalid switch_weapon payload from ${client.sessionId}`);
+        return;
+      }
+
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+
+      if (slot === "melee") {
+        if (player.meleeWeapon.length === 0) return;
+        player.currentWeapon = player.meleeWeapon;
+        return;
+      }
+
+      if (player.rangedWeapon.length === 0) return;
+      player.currentWeapon = player.rangedWeapon;
+    });
+
+    this.onMessage("melee_attack", (client, data) => {
+      if (this.state.matchState !== "PLAYING") return;
+
+      const targetId = data?.targetId;
+      if (typeof targetId !== "string" || targetId.length === 0) {
+        console.warn(`[BattleRoom] Ignoring invalid melee_attack payload from ${client.sessionId}`);
+        return;
+      }
+
+      const attacker = this.state.players.get(client.sessionId);
+      const target = this.state.players.get(targetId);
+      if (!attacker || !target || target.hp <= 0) return;
+      if (attacker.currentWeapon !== attacker.meleeWeapon || !this.isMeleeWeapon(attacker.currentWeapon)) return;
+      if (!this.canProcessAction(client.sessionId, BattleRoom.MELEE_COOLDOWN_MS)) return;
+
+      const dx = attacker.x - target.x;
+      const dz = attacker.z - target.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+      if (distance > BattleRoom.MELEE_RANGE) {
+        console.warn(
+          `[BattleRoom] Invalid melee_attack from ${attacker.username} to ${target.username} due to distance: ${distance}`
+        );
+        return;
+      }
+
+      target.hp -= BattleRoom.MELEE_DAMAGE;
+      if (target.hp < 0) target.hp = 0;
+
+      if (target.hp === 0) {
+        console.log(`[BattleRoom] Player ${target.username} died by ${attacker.username}.`);
+        void this.recordKillEvent(client.sessionId, targetId, BattleRoom.MELEE_DAMAGE, attacker.currentWeapon);
+      }
+    });
+
     this.onMessage("hit", (client, data) => {
       if (this.state.matchState !== "PLAYING") return;
 
@@ -244,18 +393,22 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const target = this.state.players.get(targetId);
 
       if (shooter && target && target.hp > 0) {
+        if (shooter.currentWeapon !== shooter.rangedWeapon || shooter.rangedWeapon.length === 0) return;
+        const weaponConfig = this.getWeaponConfig(shooter.currentWeapon);
+        if (!weaponConfig || !this.consumeAcceptedShot(client.sessionId)) return;
+
         // anticheat Distance Validation
         const dx = shooter.x - target.x;
         const dz = shooter.z - target.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance <= this.maxHitDistance) {
-          target.hp -= this.hitDamage;
+          target.hp -= weaponConfig.damage;
           if (target.hp < 0) target.hp = 0;
           
           if (target.hp === 0) {
              console.log(`[BattleRoom] Player ${target.username} died by ${shooter.username}.`);
-             void this.recordKillEvent(client.sessionId, targetId);
+             void this.recordKillEvent(client.sessionId, targetId, weaponConfig.damage, shooter.currentWeapon);
           }
         } else {
           console.warn(`[BattleRoom] Invalid hit from ${shooter.username} to ${target.username} due to distance: ${distance}`);
@@ -338,6 +491,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       if (item.type === "MedicalKit") {
         player.hp = Math.min(player.hp + this.medicalKitHeal, BattleRoom.MAX_PLAYER_HP);
+      } else {
+        const weaponConfig = this.getWeaponConfig(item.type);
+        if (!weaponConfig) {
+          console.warn(`[BattleRoom] Ignoring pickup_item for unsupported weapon type: ${item.type}`);
+          return;
+        }
+
+        player.rangedWeapon = item.type;
+        player.currentWeapon = item.type;
+        player.ammo = weaponConfig.maxAmmo;
+        this.lastShootAtBySessionId.delete(client.sessionId);
+        this.acceptedShotsBySessionId.delete(client.sessionId);
       }
 
       this.state.items.delete(itemId);
@@ -345,6 +510,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
         playerId: client.sessionId,
         itemId,
         itemType: item.type,
+        fireRate: item.type === "MedicalKit" ? 0 : 1 / (this.getWeaponConfig(item.type)?.fireRatePerSecond ?? 1),
+        maxAmmo: item.type === "MedicalKit" ? 0 : this.getWeaponConfig(item.type)?.maxAmmo ?? 0,
       });
     });
   }
@@ -398,6 +565,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     const username = player.username;
     this.state.players.delete(client.sessionId);
+    this.lastShootAtBySessionId.delete(client.sessionId);
+    this.acceptedShotsBySessionId.delete(client.sessionId);
     void this.markParticipantLeft(client.sessionId);
     this.participantBySessionId.delete(client.sessionId);
     console.log(`[BattleRoom] Client permanently left: ${username}`);

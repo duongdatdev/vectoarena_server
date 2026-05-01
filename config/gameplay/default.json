@@ -6,7 +6,18 @@
   "maxItemPickupDistance": 3,
   "medicalKitHeal": 30,
   "reconnectTimeoutSeconds": 15,
-  "rifleDamage": 10,
+  "weapons": {
+    "Rifle": {
+      "damage": 10,
+      "fireRatePerSecond": 10,
+      "maxAmmo": 30
+    },
+    "Shotgun": {
+      "damage": 25,
+      "fireRatePerSecond": 1.5,
+      "maxAmmo": 8
+    }
+  },
   "itemSpawnWeights": {
     "Rifle": 3,
     "Shotgun": 2,
