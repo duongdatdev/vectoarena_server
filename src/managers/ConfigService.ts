@@ -4,6 +4,15 @@ import path from "path";
 export type ItemSpawnWeights = {
   Rifle: number;
   Shotgun: number;
+  Pistol: number;
+  BurstRifle: number;
+  Sniper: number;
+  HunterSniper: number;
+  Launcher: number;
+  MachineGun: number;
+  Minigun: number;
+  BlasterShotgun: number;
+  RebelRifle: number;
   MedicalKit: number;
 };
 
@@ -14,8 +23,7 @@ export type WeaponConfig = {
 };
 
 export type WeaponConfigs = {
-  Rifle: WeaponConfig;
-  Shotgun: WeaponConfig;
+  [key: string]: WeaponConfig;
 };
 
 export type RuntimeGameConfig = {
@@ -46,21 +54,31 @@ export class ConfigService {
       medicalKitHeal: 30,
       reconnectTimeoutSeconds: 15,
       weapons: {
-        Rifle: {
-          damage: 10,
-          fireRatePerSecond: 10,
-          maxAmmo: 30,
-        },
-        Shotgun: {
-          damage: 25,
-          fireRatePerSecond: 1.5,
-          maxAmmo: 8,
-        },
+        Rifle: { damage: 10, fireRatePerSecond: 10, maxAmmo: 30 },
+        Shotgun: { damage: 25, fireRatePerSecond: 1.5, maxAmmo: 8 },
+        Pistol: { damage: 12, fireRatePerSecond: 5, maxAmmo: 12 },
+        BurstRifle: { damage: 14, fireRatePerSecond: 8, maxAmmo: 24 },
+        Sniper: { damage: 50, fireRatePerSecond: 0.8, maxAmmo: 5 },
+        HunterSniper: { damage: 45, fireRatePerSecond: 1, maxAmmo: 6 },
+        Launcher: { damage: 60, fireRatePerSecond: 0.5, maxAmmo: 3 },
+        MachineGun: { damage: 8, fireRatePerSecond: 14, maxAmmo: 50 },
+        Minigun: { damage: 6, fireRatePerSecond: 20, maxAmmo: 80 },
+        BlasterShotgun: { damage: 30, fireRatePerSecond: 1.2, maxAmmo: 6 },
+        RebelRifle: { damage: 12, fireRatePerSecond: 9, maxAmmo: 25 },
       },
       itemSpawnWeights: {
-        Rifle: 1,
-        Shotgun: 1,
-        MedicalKit: 1,
+        Rifle: 3,
+        Shotgun: 3,
+        Pistol: 4,
+        BurstRifle: 2,
+        Sniper: 1,
+        HunterSniper: 1,
+        Launcher: 1,
+        MachineGun: 2,
+        Minigun: 1,
+        BlasterShotgun: 2,
+        RebelRifle: 2,
+        MedicalKit: 3,
       },
     };
   }
@@ -118,14 +136,19 @@ export class ConfigService {
         config.reconnectTimeoutSeconds = fileConfig.reconnectTimeoutSeconds;
       }
       if (fileConfig.weapons) {
-        this.mergeWeaponConfig(config.weapons.Rifle, fileConfig.weapons.Rifle);
-        this.mergeWeaponConfig(config.weapons.Shotgun, fileConfig.weapons.Shotgun);
+        for (const key of Object.keys(config.weapons)) {
+          if (fileConfig.weapons[key]) {
+            this.mergeWeaponConfig(config.weapons[key], fileConfig.weapons[key]);
+          }
+        }
       }
       if (fileConfig.itemSpawnWeights) {
         const weights = fileConfig.itemSpawnWeights;
-        if (this.isPositiveInteger(weights.Rifle)) config.itemSpawnWeights.Rifle = weights.Rifle;
-        if (this.isPositiveInteger(weights.Shotgun)) config.itemSpawnWeights.Shotgun = weights.Shotgun;
-        if (this.isPositiveInteger(weights.MedicalKit)) config.itemSpawnWeights.MedicalKit = weights.MedicalKit;
+        for (const key of Object.keys(config.itemSpawnWeights) as Array<keyof ItemSpawnWeights>) {
+          if (this.isPositiveInteger(weights[key])) {
+            config.itemSpawnWeights[key] = weights[key];
+          }
+        }
       }
     }
 

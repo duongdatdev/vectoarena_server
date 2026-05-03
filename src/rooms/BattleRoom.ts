@@ -22,16 +22,17 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private maxHitDistance = 60;
   private reconnectTimeoutSeconds = 15;
   private weaponConfigs: WeaponConfigs = {
-    Rifle: {
-      damage: 10,
-      fireRatePerSecond: 10,
-      maxAmmo: 30,
-    },
-    Shotgun: {
-      damage: 25,
-      fireRatePerSecond: 1.5,
-      maxAmmo: 8,
-    },
+    Rifle: { damage: 10, fireRatePerSecond: 10, maxAmmo: 30 },
+    Shotgun: { damage: 25, fireRatePerSecond: 1.5, maxAmmo: 8 },
+    Pistol: { damage: 12, fireRatePerSecond: 5, maxAmmo: 12 },
+    BurstRifle: { damage: 14, fireRatePerSecond: 8, maxAmmo: 24 },
+    Sniper: { damage: 50, fireRatePerSecond: 0.8, maxAmmo: 5 },
+    HunterSniper: { damage: 45, fireRatePerSecond: 1, maxAmmo: 6 },
+    Launcher: { damage: 60, fireRatePerSecond: 0.5, maxAmmo: 3 },
+    MachineGun: { damage: 8, fireRatePerSecond: 14, maxAmmo: 50 },
+    Minigun: { damage: 6, fireRatePerSecond: 20, maxAmmo: 80 },
+    BlasterShotgun: { damage: 30, fireRatePerSecond: 1.2, maxAmmo: 6 },
+    RebelRifle: { damage: 12, fireRatePerSecond: 9, maxAmmo: 25 },
   };
   private lastShootAtBySessionId = new Map<string, number>();
   private acceptedShotsBySessionId = new Map<string, number[]>();
@@ -180,11 +181,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   private getWeaponConfig(weaponType: string): WeaponConfig | null {
-    if (weaponType === "Rifle" || weaponType === "Shotgun") {
-      return this.weaponConfigs[weaponType];
-    }
-
-    return null;
+    return this.weaponConfigs[weaponType] ?? null;
   }
 
   private isMeleeWeapon(weaponType: string): boolean {

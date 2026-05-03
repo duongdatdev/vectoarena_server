@@ -14,11 +14,13 @@ export class ItemSpawner {
       return this.ITEM_TYPES[Math.floor(Math.random() * this.ITEM_TYPES.length)];
     }
 
-    const weightedPool: Array<{ type: string; weight: number }> = [
-      { type: "Rifle", weight: Math.max(0, weights.Rifle) },
-      { type: "Shotgun", weight: Math.max(0, weights.Shotgun) },
-      { type: "MedicalKit", weight: Math.max(0, weights.MedicalKit) },
-    ];
+    const weightedPool: Array<{ type: string; weight: number }> = [];
+    for (const key of Object.keys(weights) as Array<keyof ItemSpawnWeights>) {
+      const w = Math.max(0, weights[key]);
+      if (w > 0) {
+        weightedPool.push({ type: key, weight: w });
+      }
+    }
 
     const totalWeight = weightedPool.reduce((sum, item) => sum + item.weight, 0);
     if (totalWeight <= 0) {
