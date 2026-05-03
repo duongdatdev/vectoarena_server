@@ -369,9 +369,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
 
       target.hp -= BattleRoom.MELEE_DAMAGE;
-      if (target.hp < 0) target.hp = 0;
+      if (target.hp <= 0 && !target.isDead) {
+        target.hp = 0;
+        target.isDead = true;
+        this.state.aliveCount = Math.max(0, this.state.aliveCount - 1);
+        attacker.kills++;
 
-      if (target.hp === 0) {
         console.log(`[BattleRoom] Player ${target.username} died by ${attacker.username}.`);
         void this.recordKillEvent(client.sessionId, targetId, BattleRoom.MELEE_DAMAGE, attacker.currentWeapon);
       }
@@ -401,9 +404,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
         
         if (distance <= this.maxHitDistance) {
           target.hp -= weaponConfig.damage;
-          if (target.hp < 0) target.hp = 0;
-          
-          if (target.hp === 0) {
+          if (target.hp <= 0 && !target.isDead) {
+             target.hp = 0;
+             target.isDead = true;
+             this.state.aliveCount = Math.max(0, this.state.aliveCount - 1);
+             shooter.kills++;
+             
              console.log(`[BattleRoom] Player ${target.username} died by ${shooter.username}.`);
              void this.recordKillEvent(client.sessionId, targetId, weaponConfig.damage, shooter.currentWeapon);
           }
@@ -538,6 +544,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (this.clients.length === this.maxClients) {
       this.lock();
       this.state.matchState = "PLAYING";
+      this.state.aliveCount = this.clients.length;
       this.broadcast("GAME_START");
       void this.setMatchPlaying();
     }
@@ -561,6 +568,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
 
     const username = player.username;
+
+    if (!player.isDead && this.state.matchState === "PLAYING") {
+      player.isDead = true;
+      this.state.aliveCount = Math.max(0, this.state.aliveCount - 1);
+    }
+
     this.state.players.delete(client.sessionId);
     this.lastShootAtBySessionId.delete(client.sessionId);
     this.acceptedShotsBySessionId.delete(client.sessionId);

@@ -5,6 +5,7 @@ import { ItemState } from "./ItemState";
 
 export class GameState extends Schema {
   @type("string") matchState: string = "WAITING";
+  @type("number") aliveCount: number = 0;
 
   @type({ map: PlayerState })
   players = new MapSchema<PlayerState>();
