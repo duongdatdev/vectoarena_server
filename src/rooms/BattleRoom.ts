@@ -17,6 +17,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private static readonly MELEE_DAMAGE = 35;
   private static readonly MELEE_RANGE = 2.75;
   private static readonly MELEE_COOLDOWN_MS = 700;
+  private static readonly MAX_MOVE_SPEED = 3.5;
+  private static readonly MOVE_SPEED_GRACE_MULTIPLIER = 1.35;
+  private static readonly MAX_MOVE_DELTA_TIME_MS = 250;
   private maxItemPickupDistance = 3;
   private medicalKitHeal = 30;
   private maxHitDistance = 60;
@@ -36,6 +39,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   };
   private lastShootAtBySessionId = new Map<string, number>();
   private acceptedShotsBySessionId = new Map<string, number[]>();
+  private lastMoveAtBySessionId = new Map<string, number>();
   private matchRecordId: string | null = null;
   private participantBySessionId = new Map<string, string>();
 
@@ -272,6 +276,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return acceptedShots.filter((shotAt) => now - shotAt <= BattleRoom.ACCEPTED_SHOT_TTL_MS);
   }
 
+  private getAllowedMoveDistance(sessionId: string, now: number): number {
+    const lastMoveAt = this.lastMoveAtBySessionId.get(sessionId);
+    this.lastMoveAtBySessionId.set(sessionId, now);
+
+    if (!lastMoveAt) {
+      return BattleRoom.MAX_MOVE_SPEED * BattleRoom.MOVE_SPEED_GRACE_MULTIPLIER;
+    }
+
+    const elapsedMs = Math.max(0, Math.min(now - lastMoveAt, BattleRoom.MAX_MOVE_DELTA_TIME_MS));
+    return BattleRoom.MAX_MOVE_SPEED * BattleRoom.MOVE_SPEED_GRACE_MULTIPLIER * (elapsedMs / 1000);
+  }
+
   async onCreate() {
     const runtimeConfig = await ConfigService.loadActiveConfig();
 
@@ -310,9 +326,27 @@ export class BattleRoom extends Room<{ state: GameState }> {
           return;
         }
 
-        player.x = x;
+        const dx = x - player.x;
+        const dz = z - player.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        const allowedDistance = this.getAllowedMoveDistance(client.sessionId, Date.now());
+
+        if (distance > allowedDistance) {
+          if (distance > 0 && allowedDistance > 0) {
+            const scale = allowedDistance / distance;
+            player.x += dx * scale;
+            player.z += dz * scale;
+          }
+
+          console.warn(
+            `[BattleRoom] Clamped suspicious move from ${player.username}: distance=${distance.toFixed(2)}, allowed=${allowedDistance.toFixed(2)}`
+          );
+        } else {
+          player.x = x;
+          player.z = z;
+        }
+
         player.y = y;
-        player.z = z;
         player.rotation = this.normalizeRotation(rotation);
       }
     });
@@ -604,6 +638,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.state.players.delete(client.sessionId);
     this.lastShootAtBySessionId.delete(client.sessionId);
     this.acceptedShotsBySessionId.delete(client.sessionId);
+    this.lastMoveAtBySessionId.delete(client.sessionId);
     void this.markParticipantLeft(client.sessionId);
     this.participantBySessionId.delete(client.sessionId);
     console.log(`[BattleRoom] Client permanently left: ${username}`);
