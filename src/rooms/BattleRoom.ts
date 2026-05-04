@@ -165,6 +165,45 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
+  private handlePlayerDeath(victimId: string, killerId: string, weapon: string, damage: number) {
+    const victim = this.state.players.get(victimId);
+    const killer = this.state.players.get(killerId);
+
+    if (!victim || !killer) return;
+
+    victim.hp = 0;
+    victim.isDead = true;
+    this.state.aliveCount = Math.max(0, this.state.aliveCount - 1);
+    killer.kills++;
+
+    console.log(`[BattleRoom] Player ${victim.username} died by ${killer.username}.`);
+    void this.recordKillEvent(killerId, victimId, damage, weapon);
+
+    this.broadcast("kill_feed", {
+      killerName: killer.username,
+      victimName: victim.username,
+      weapon: weapon
+    });
+
+    if (victim.rangedWeapon && victim.rangedWeapon.length > 0) {
+      ItemSpawner.spawnItemAt(this.state, victim.rangedWeapon, victim.x, victim.z);
+    }
+    
+    if (Math.random() < 0.8) {
+      ItemSpawner.spawnItemAt(this.state, "MedicalKit", victim.x + 0.5, victim.z + 0.5);
+    }
+
+    if (this.state.aliveCount <= 1 && this.state.matchState === "PLAYING") {
+      setTimeout(() => {
+        if (this.state.matchState === "PLAYING") {
+          this.state.matchState = "FINISHED";
+          this.broadcast("GAME_OVER");
+          void this.finalizeMatch("FINISHED");
+        }
+      }, 3000); 
+    }
+  }
+
   private isFiniteNumber(value: unknown): value is number {
     return typeof value === "number" && Number.isFinite(value);
   }
@@ -370,13 +409,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       target.hp -= BattleRoom.MELEE_DAMAGE;
       if (target.hp <= 0 && !target.isDead) {
-        target.hp = 0;
-        target.isDead = true;
-        this.state.aliveCount = Math.max(0, this.state.aliveCount - 1);
-        attacker.kills++;
-
-        console.log(`[BattleRoom] Player ${target.username} died by ${attacker.username}.`);
-        void this.recordKillEvent(client.sessionId, targetId, BattleRoom.MELEE_DAMAGE, attacker.currentWeapon);
+        this.handlePlayerDeath(targetId, client.sessionId, attacker.currentWeapon, BattleRoom.MELEE_DAMAGE);
       }
     });
 
@@ -405,13 +438,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
         if (distance <= this.maxHitDistance) {
           target.hp -= weaponConfig.damage;
           if (target.hp <= 0 && !target.isDead) {
-             target.hp = 0;
-             target.isDead = true;
-             this.state.aliveCount = Math.max(0, this.state.aliveCount - 1);
-             shooter.kills++;
-             
-             console.log(`[BattleRoom] Player ${target.username} died by ${shooter.username}.`);
-             void this.recordKillEvent(client.sessionId, targetId, weaponConfig.damage, shooter.currentWeapon);
+             this.handlePlayerDeath(targetId, client.sessionId, shooter.currentWeapon, weaponConfig.damage);
           }
         } else {
           console.warn(`[BattleRoom] Invalid hit from ${shooter.username} to ${target.username} due to distance: ${distance}`);

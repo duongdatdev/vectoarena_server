@@ -64,4 +64,16 @@ export class ItemSpawner {
     
     console.log(`[ItemSpawner] Spawned ${spawned} initial items. Total in state: ${state.items.size}`);
   }
+
+  public static spawnItemAt(state: GameState, type: string, x: number, z: number) {
+    const item = new ItemState();
+    item.id = `item_${this.generateRandomId(Date.now() % 1000)}`;
+    item.type = type;
+    item.x = x;
+    item.y = 0.1;
+    item.z = z;
+
+    state.items.set(item.id, item);
+    console.log(`[ItemSpawner] Dropped item ${type} at (${x}, ${z})`);
+  }
 }
