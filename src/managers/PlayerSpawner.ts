@@ -25,6 +25,7 @@ export class PlayerSpawner {
     player.meleeWeapon = this.DEFAULT_MELEE_WEAPON;
     player.rangedWeapon = "";
     player.ammo = 0;
+    player.skinId = typeof options.skinId === "string" && options.skinId.length > 0 ? options.skinId : "Female01";
 
     return player;
   }

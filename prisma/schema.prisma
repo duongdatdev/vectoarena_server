@@ -12,6 +12,7 @@ model User {
   password       String                @db.VarChar(255)
   displayName    String?               @db.VarChar(64)
   vecBalance     Int                   @default(0)
+  coinBalance    Int                   @default(1500)
   walletAddress  String?               @db.VarChar(64)
   level          Int                   @default(1)
   xp             Int                   @default(0)
@@ -126,6 +127,7 @@ model KillEvent {
 model CurrencyTransaction {
   id              String            @id @default(uuid()) @db.Uuid
   userId          String            @db.Uuid
+  currencyType    CurrencyType      @default(COIN)
   type            TransactionType
   amount          Int
   balanceBefore   Int
@@ -209,6 +211,11 @@ enum TransactionStatus {
   SUCCESS
   FAILED
   OFFCHAIN_ONLY
+}
+
+enum CurrencyType {
+  COIN
+  VEC
 }
 
 enum SkinType {

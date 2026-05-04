@@ -4,7 +4,7 @@ Tai lieu nay ghi lai thiet ke database moi cho VectoArena sau khi rut gon schema
 
 ## 1. Huong thiet ke
 
-Database chi luu du lieu tai khoan, lich su tran dau, kill log, reward tong ket, so cai VEC va skin da mo khoa.
+Database chi luu du lieu tai khoan, lich su tran dau, kill log, reward tong ket, so cai tien te va skin da mo khoa.
 
 Nhung du lieu thay doi lien tuc trong gameplay realtime, hoac du lieu balance co the doc tu file, khong luu thanh bang SQL rieng.
 
@@ -63,6 +63,13 @@ Ly do:
 ### 3.1 User
 
 `User.vecBalance` doi tu `Float` sang `Int` de tranh sai so so hoc.
+
+`User.coinBalance` la soft currency off-chain dung cho shop skin hien tai, mac dinh 1500 coin cho tai khoan moi.
+
+Quy uoc:
+
+- `coinBalance`: tien giao dich truoc mat trong shop, khong lien quan blockchain.
+- `vecBalance`: giu cho VEC/Web3 sau nay, chi dung cho reward blockchain hoac mot so skin dac biet can VEC.
 
 Them:
 
@@ -145,15 +152,33 @@ Hai cot nay chi dai dien cosmetic, khong anh huong damage, HP, fire rate, range 
 
 ### 3.6 CurrencyTransaction
 
-`CurrencyTransaction` la so cai VEC va Web3 demo.
+`CurrencyTransaction` la so cai chung cho ca COIN off-chain va VEC/Web3 demo.
 
 Nen dung `Int` cho amount/balance:
 
 ```prisma
+currencyType  CurrencyType
 amount        Int
 balanceBefore Int
 balanceAfter  Int
 ```
+
+`currencyType` gom:
+
+```prisma
+enum CurrencyType {
+  COIN
+  VEC
+}
+```
+
+Flow shop hien tai:
+
+1. User mua skin bang `COIN`.
+2. Server update `User.coinBalance`.
+3. Server tao `CurrencyTransaction` voi `currencyType = COIN`, `type = PURCHASE`, `status = OFFCHAIN_ONLY`.
+4. Server tao dong `SkinInventory`.
+5. Server update `UserLoadout.equippedPlayerSkin` neu mua xong auto equip.
 
 Them cac cot Web3:
 
@@ -180,7 +205,7 @@ Flow:
 1. Server tinh `rewardVec`.
 2. Server update `MatchParticipant.rewardVec`.
 3. Server update `User.vecBalance`.
-4. Server tao `CurrencyTransaction`.
+4. Server tao `CurrencyTransaction` voi `currencyType = VEC`.
 5. Neu bat Sepolia, transaction ban dau la `PENDING`.
 6. Khi co ket qua blockchain, update `txHash` va `status`.
 

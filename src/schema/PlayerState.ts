@@ -14,4 +14,5 @@ export class PlayerState extends Schema {
   @type("string") rangedWeapon: string = "";
   @type("number") kills: number = 0;
   @type("boolean") isDead: boolean = false;
+  @type("string") skinId: string = "Female01";
 }

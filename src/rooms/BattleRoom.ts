@@ -6,8 +6,39 @@ import { PlayerSpawner } from "../managers/PlayerSpawner";
 import { ItemSpawner } from "../managers/ItemSpawner";
 import { ConfigService, WeaponConfig, WeaponConfigs } from "../managers/ConfigService";
 import prisma from "../database/prisma";
+import { DEFAULT_PLAYER_SKIN_ID } from "../managers/SkinCatalog";
 
 type WeaponType = keyof WeaponConfigs;
+type PrismaWeaponType =
+  | "RIFLE"
+  | "SHOTGUN"
+  | "FIST"
+  | "PISTOL"
+  | "BURST_RIFLE"
+  | "SNIPER"
+  | "HUNTER_SNIPER"
+  | "LAUNCHER"
+  | "MACHINE_GUN"
+  | "MINIGUN"
+  | "BLASTER_SHOTGUN"
+  | "REBEL_RIFLE"
+  | "SWORD";
+
+const PRISMA_WEAPON_TYPE_BY_RUNTIME_NAME: Record<string, PrismaWeaponType> = {
+  Rifle: "RIFLE",
+  Shotgun: "SHOTGUN",
+  Fist: "FIST",
+  Pistol: "PISTOL",
+  BurstRifle: "BURST_RIFLE",
+  Sniper: "SNIPER",
+  HunterSniper: "HUNTER_SNIPER",
+  Launcher: "LAUNCHER",
+  MachineGun: "MACHINE_GUN",
+  Minigun: "MINIGUN",
+  BlasterShotgun: "BLASTER_SHOTGUN",
+  RebelRifle: "REBEL_RIFLE",
+  Sword: "SWORD",
+};
 
 export class BattleRoom extends Room<{ state: GameState }> {
   private static readonly DEFAULT_MELEE_WEAPON = "Sword";
@@ -42,6 +73,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private lastMoveAtBySessionId = new Map<string, number>();
   private matchRecordId: string | null = null;
   private participantBySessionId = new Map<string, string>();
+
+  private toPrismaWeaponType(weapon: string): PrismaWeaponType | null {
+    return PRISMA_WEAPON_TYPE_BY_RUNTIME_NAME[weapon] ?? null;
+  }
 
   private async createMatchRecord(): Promise<void> {
     try {
@@ -107,6 +142,25 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
+  private async getEquippedPlayerSkin(client: Client): Promise<string> {
+    const userId = (client as any).userId as string | undefined;
+    if (!userId) {
+      return DEFAULT_PLAYER_SKIN_ID;
+    }
+
+    try {
+      const loadout = await (prisma as any).userLoadout.findUnique({
+        where: { userId },
+        select: { equippedPlayerSkin: true },
+      });
+
+      return loadout?.equippedPlayerSkin || DEFAULT_PLAYER_SKIN_ID;
+    } catch (error) {
+      console.error("[BattleRoom] Failed to load equipped player skin:", error);
+      return DEFAULT_PLAYER_SKIN_ID;
+    }
+  }
+
   private async markParticipantLeft(sessionId: string): Promise<void> {
     const participantId = this.participantBySessionId.get(sessionId);
     if (!participantId) return;
@@ -135,6 +189,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const victimParticipantId = this.participantBySessionId.get(victimSessionId);
     if (!victimParticipantId) return;
 
+    const prismaWeaponType = this.toPrismaWeaponType(weapon);
+
     try {
       await (prisma as any).killEvent.create({
         data: {
@@ -142,7 +198,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
           killerParticipantId,
           victimParticipantId,
           damage,
-          weapon: weapon.toUpperCase(),
+          weapon: prismaWeaponType,
           deathCause: "PLAYER",
         },
       });
@@ -595,8 +651,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return true; // allow guest if no token
   }
 
-  onJoin(client: Client, options: any) {
+  async onJoin(client: Client, options: any) {
     const player = PlayerSpawner.createPlayer(client, options, this.clients.length);
+    player.skinId = await this.getEquippedPlayerSkin(client);
     this.state.players.set(client.sessionId, player);
     void this.createParticipantRecord(client, player.username);
     

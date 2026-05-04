@@ -5,6 +5,7 @@ import express from "express";
 import cors from "cors";
 import { BattleRoom } from "./rooms/BattleRoom";
 import authRoutes from "./routes/auth";
+import playerRoutes from "./routes/player";
 
 const port = Number(process.env.PORT || 2567);
 const app = express();
@@ -14,6 +15,7 @@ app.use(express.json());
 
 //auth routes
 app.use("/auth", authRoutes);
+app.use("/player", playerRoutes);
 
 const httpServer = createServer(app);
 const gameServer = new Server({
