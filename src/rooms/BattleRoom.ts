@@ -47,6 +47,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private static readonly ACCEPTED_SHOT_TTL_MS = 2_000;
   private static readonly MELEE_DAMAGE = 35;
   private static readonly MELEE_RANGE = 2.75;
+  private static readonly MELEE_ATTACK_ANGLE_DEGREES = 85;
   private static readonly MELEE_COOLDOWN_MS = 700;
   private static readonly MAX_MOVE_SPEED = 3.5;
   private static readonly MOVE_SPEED_GRACE_MULTIPLIER = 1.35;
@@ -299,6 +300,25 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return true;
   }
 
+  private isTargetInsideMeleeArc(attacker: any, target: any): boolean {
+    const dx = target.x - attacker.x;
+    const dz = target.z - attacker.z;
+    const distance = Math.sqrt(dx * dx + dz * dz);
+    if (distance > BattleRoom.MELEE_RANGE || distance <= 0.001) {
+      return false;
+    }
+
+    const rotationRad = (attacker.rotation * Math.PI) / 180;
+    const forwardX = Math.sin(rotationRad);
+    const forwardZ = Math.cos(rotationRad);
+    const directionX = dx / distance;
+    const directionZ = dz / distance;
+    const dot = forwardX * directionX + forwardZ * directionZ;
+    const minDot = Math.cos((BattleRoom.MELEE_ATTACK_ANGLE_DEGREES * 0.5 * Math.PI) / 180);
+
+    return dot >= minDot;
+  }
+
   private canProcessShot(sessionId: string, weaponConfig: WeaponConfig): boolean {
     return this.canProcessAction(sessionId, 1000 / weaponConfig.fireRatePerSecond);
   }
@@ -475,24 +495,33 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.onMessage("melee_attack", (client, data) => {
       if (this.state.matchState !== "PLAYING") return;
 
-      const targetId = data?.targetId;
-      if (typeof targetId !== "string" || targetId.length === 0) {
+      const targetId = typeof data?.targetId === "string" ? data.targetId : "";
+      if (targetId.length > 0 && !this.state.players.has(targetId)) {
         console.warn(`[BattleRoom] Ignoring invalid melee_attack payload from ${client.sessionId}`);
         return;
       }
 
       const attacker = this.state.players.get(client.sessionId);
-      const target = this.state.players.get(targetId);
-      if (!attacker || !target || target.hp <= 0) return;
+      if (!attacker) return;
       if (attacker.currentWeapon !== attacker.meleeWeapon || !this.isMeleeWeapon(attacker.currentWeapon)) return;
       if (!this.canProcessAction(client.sessionId, BattleRoom.MELEE_COOLDOWN_MS)) return;
+
+      this.broadcast("melee_attack", {
+        attackerId: client.sessionId,
+        targetId,
+      });
+
+      if (targetId.length === 0) return;
+
+      const target = this.state.players.get(targetId);
+      if (!target || target.hp <= 0) return;
 
       const dx = attacker.x - target.x;
       const dz = attacker.z - target.z;
       const distance = Math.sqrt(dx * dx + dz * dz);
-      if (distance > BattleRoom.MELEE_RANGE) {
+      if (!this.isTargetInsideMeleeArc(attacker, target)) {
         console.warn(
-          `[BattleRoom] Invalid melee_attack from ${attacker.username} to ${target.username} due to distance: ${distance}`
+          `[BattleRoom] Invalid melee_attack from ${attacker.username} to ${target.username} due to range/angle: ${distance}`
         );
         return;
       }

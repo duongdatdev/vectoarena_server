@@ -1,6 +1,6 @@
 {
   "profileCode": "default_json_v2",
-  "maxPlayers": 2,
+  "maxPlayers": 1,
   "initialSpawnCount": 20,
   "maxHitDistance": 60,
   "maxItemPickupDistance": 3,
