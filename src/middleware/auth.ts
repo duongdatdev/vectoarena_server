@@ -8,7 +8,7 @@ export type AuthenticatedRequest = Request & {
   };
 };
 
-export function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+export function authenticateToken(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   const authorization = req.headers.authorization;
   const token = authorization?.startsWith("Bearer ") ? authorization.substring("Bearer ".length) : null;
 

@@ -1,6 +1,6 @@
 import { Router, Response } from "express";
 import prisma from "../database/prisma";
-import { AuthenticatedRequest, requireAuth } from "../middleware/auth";
+import { AuthenticatedRequest, authenticateToken } from "../middleware/auth";
 import { DEFAULT_PLAYER_SKIN_ID, getPlayerSkinById, PLAYER_SKIN_CATALOG } from "../managers/SkinCatalog";
 
 const router = Router();
@@ -40,6 +40,7 @@ async function buildPlayerProfile(userId: string) {
     select: {
       id: true,
       username: true,
+      vecBalance: true,
       coinBalance: true,
       loadout: true,
       skinInventory: {
@@ -58,6 +59,7 @@ async function buildPlayerProfile(userId: string) {
 
   return {
     username: user.username,
+    vecBalance: user.vecBalance,
     coinBalance: user.coinBalance,
     equippedPlayerSkin,
     ownedSkins,
@@ -69,7 +71,7 @@ async function buildPlayerProfile(userId: string) {
   };
 }
 
-router.get("/profile", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+router.get("/profile", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const profile = await buildPlayerProfile(req.user!.userId);
     if (!profile) {
@@ -83,7 +85,7 @@ router.get("/profile", requireAuth, async (req: AuthenticatedRequest, res: Respo
   }
 });
 
-router.post("/buy-skin", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+router.post("/buy-skin", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   const { skinId } = req.body as { skinId?: string };
 
   if (!skinId) {
@@ -196,7 +198,7 @@ router.post("/buy-skin", requireAuth, async (req: AuthenticatedRequest, res: Res
   }
 });
 
-router.post("/equip-skin", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+router.post("/equip-skin", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   const { skinId } = req.body as { skinId?: string };
 
   if (!skinId) {
