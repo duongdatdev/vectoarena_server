@@ -7,6 +7,7 @@ import { ItemSpawner } from "../managers/ItemSpawner";
 import { ConfigService, WeaponConfig, WeaponConfigs } from "../managers/ConfigService";
 import prisma from "../database/prisma";
 import { DEFAULT_PLAYER_SKIN_ID } from "../managers/SkinCatalog";
+import { ProgressionManager } from "../managers/ProgressionManager";
 
 type WeaponType = keyof WeaponConfigs;
 type PrismaWeaponType =
@@ -74,6 +75,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private lastMoveAtBySessionId = new Map<string, number>();
   private matchRecordId: string | null = null;
   private participantBySessionId = new Map<string, string>();
+  private placementBySessionId = new Map<string, number>();
+  private finalizedMatchResults = false;
 
   private toPrismaWeaponType(weapon: string): PrismaWeaponType | null {
     return PRISMA_WEAPON_TYPE_BY_RUNTIME_NAME[weapon] ?? null;
@@ -110,18 +113,135 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
+  private getPlacementForSession(sessionId: string): number {
+    const recordedPlacement = this.placementBySessionId.get(sessionId);
+    if (recordedPlacement) return recordedPlacement;
+
+    const player = this.state.players.get(sessionId);
+    if (player && !player.isDead) return 1;
+
+    return Math.max(1, this.maxClients);
+  }
+
   private async finalizeMatch(status: "FINISHED" | "ABANDONED"): Promise<void> {
     if (!this.matchRecordId) return;
+    if (this.finalizedMatchResults) return;
+    this.finalizedMatchResults = true;
+
     try {
-      await (prisma as any).match.update({
-        where: { id: this.matchRecordId },
-        data: {
-          status,
-          endedAt: new Date(),
+      const matchId = this.matchRecordId;
+      const match = await (prisma as any).match.findUnique({
+        where: { id: matchId },
+        select: { status: true, startedAt: true, maxPlayers: true },
+      });
+
+      if (!match || match.status === "FINISHED" || match.status === "ABANDONED") return;
+
+      const participants = await (prisma as any).matchParticipant.findMany({
+        where: { matchId },
+        select: {
+          id: true,
+          userId: true,
+          sessionId: true,
+          kills: true,
+          deaths: true,
+          rewardXp: true,
+          leaveAt: true,
         },
       });
+
+      const shouldAwardXp = status === "FINISHED" && Boolean(match.startedAt);
+      const maxPlayers = Math.max(1, match.maxPlayers ?? this.maxClients);
+      const matchResultMessages: Array<{ sessionId: string; payload: Record<string, number | boolean> }> = [];
+
+      await (prisma as any).$transaction(async (tx: any) => {
+        await tx.match.update({
+          where: { id: matchId },
+          data: {
+            status,
+            endedAt: new Date(),
+          },
+        });
+
+        for (const participant of participants) {
+          const placement = this.getPlacementForSession(participant.sessionId);
+          const isWinner = status === "FINISHED" && placement === 1;
+          const leftBeforeMatchStarted = Boolean(
+            participant.leaveAt && match.startedAt && participant.leaveAt < match.startedAt
+          );
+          let rewardXp = 0;
+
+          if (shouldAwardXp && !leftBeforeMatchStarted && participant.userId && participant.rewardXp === 0) {
+            rewardXp = ProgressionManager.calculateMatchXp({
+              maxPlayers,
+              placement,
+              kills: participant.kills,
+              isWinner,
+            });
+
+            const user = await tx.user.findUnique({
+              where: { id: participant.userId },
+              select: {
+                level: true,
+                xp: true,
+                totalMatches: true,
+                totalWins: true,
+                totalKills: true,
+                totalDeaths: true,
+                bestPlacement: true,
+              },
+            });
+
+            if (user) {
+              const progression = ProgressionManager.addXp({ level: user.level, xp: user.xp }, rewardXp);
+              await tx.user.update({
+                where: { id: participant.userId },
+                data: {
+                  level: progression.level,
+                  xp: progression.xp,
+                  totalMatches: { increment: 1 },
+                  totalWins: { increment: isWinner ? 1 : 0 },
+                  totalKills: { increment: participant.kills },
+                  totalDeaths: { increment: participant.deaths },
+                  bestPlacement: user.bestPlacement === null ? placement : Math.min(user.bestPlacement, placement),
+                },
+              });
+
+              matchResultMessages.push({
+                sessionId: participant.sessionId,
+                payload: {
+                  placement,
+                  kills: participant.kills,
+                  xpEarned: rewardXp,
+                  level: progression.level,
+                  xp: progression.xp,
+                  xpToNextLevel: progression.xpToNextLevel,
+                  xpProgress: progression.xpProgress,
+                  levelsGained: progression.levelsGained,
+                  isWinner,
+                },
+              });
+            }
+          }
+
+          await tx.matchParticipant.update({
+            where: { id: participant.id },
+            data: {
+              placement,
+              isWinner,
+              rewardXp: rewardXp > 0 ? rewardXp : participant.rewardXp,
+            },
+          });
+        }
+      });
+
+      for (const result of matchResultMessages) {
+        const client = this.clients.find((roomClient) => roomClient.sessionId === result.sessionId);
+        client?.send("match_result", result.payload);
+      }
     } catch (error) {
       console.error("[BattleRoom] Failed to finalize match:", error);
+      this.finalizedMatchResults = false;
     }
   }
 
@@ -235,6 +355,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     victim.hp = 0;
     victim.isDead = true;
     this.state.aliveCount = Math.max(0, this.state.aliveCount - 1);
+    const victimPlacement = Math.max(1, this.state.aliveCount + 1);
+    this.placementBySessionId.set(victimId, victimPlacement);
     killer.kills++;
 
     console.log(`[BattleRoom] Player ${victim.username} died by ${killer.username}.`);
@@ -719,6 +841,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (!player.isDead && this.state.matchState === "PLAYING") {
       player.isDead = true;
       this.state.aliveCount = Math.max(0, this.state.aliveCount - 1);
+      this.placementBySessionId.set(client.sessionId, Math.max(1, this.state.aliveCount + 1));
     }
 
     this.state.players.delete(client.sessionId);
@@ -726,12 +849,17 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.acceptedShotsBySessionId.delete(client.sessionId);
     this.lastMoveAtBySessionId.delete(client.sessionId);
     void this.markParticipantLeft(client.sessionId);
-    this.participantBySessionId.delete(client.sessionId);
     console.log(`[BattleRoom] Client permanently left: ${username}`);
 
     if (this.state.players.size === 0) {
       const finalStatus = this.state.matchState === "PLAYING" ? "FINISHED" : "ABANDONED";
       void this.finalizeMatch(finalStatus);
+    }
+
+    if (this.state.players.size > 0 && this.state.aliveCount <= 1 && this.state.matchState === "PLAYING") {
+      this.state.matchState = "FINISHED";
+      this.broadcast("GAME_OVER");
+      void this.finalizeMatch("FINISHED");
     }
 
     if (this.state.matchState !== "PLAYING") {

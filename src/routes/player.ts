@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import prisma from "../database/prisma";
 import { AuthenticatedRequest, authenticateToken } from "../middleware/auth";
 import { DEFAULT_PLAYER_SKIN_ID, getPlayerSkinById, PLAYER_SKIN_CATALOG } from "../managers/SkinCatalog";
+import { ProgressionManager } from "../managers/ProgressionManager";
 
 const router = Router();
 
@@ -42,6 +43,8 @@ async function buildPlayerProfile(userId: string) {
       username: true,
       vecBalance: true,
       coinBalance: true,
+      level: true,
+      xp: true,
       loadout: true,
       skinInventory: {
         where: { skinType: "PLAYER" },
@@ -61,6 +64,7 @@ async function buildPlayerProfile(userId: string) {
     username: user.username,
     vecBalance: user.vecBalance,
     coinBalance: user.coinBalance,
+    ...ProgressionManager.buildResult(user.level, user.xp),
     equippedPlayerSkin,
     ownedSkins,
     shopSkins: PLAYER_SKIN_CATALOG.map((skin) => ({
