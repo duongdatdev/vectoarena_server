@@ -5,6 +5,21 @@ import { DEFAULT_PLAYER_SKIN_ID, getPlayerSkinById, PLAYER_SKIN_CATALOG } from "
 import { ProgressionManager } from "../managers/ProgressionManager";
 
 const router = Router();
+const VALID_TRANSACTION_CURRENCY_TYPES = new Set(["VEC", "COIN"]);
+const VALID_TRANSACTION_TYPES = new Set(["PURCHASE", "MATCH_REWARD", "REFUND", "ADMIN_ADJUSTMENT"]);
+const DEFAULT_TRANSACTION_LIMIT = 20;
+const MAX_TRANSACTION_LIMIT = 100;
+
+function parsePaginationValue(value: unknown, fallback: number, min = 0, max?: number) {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  const parsedValue = Number.parseInt(String(rawValue ?? ""), 10);
+
+  if (!Number.isFinite(parsedValue) || parsedValue < min) {
+    return fallback;
+  }
+
+  return max ? Math.min(parsedValue, max) : parsedValue;
+}
 
 async function ensureDefaultPlayerInventory(userId: string) {
   await (prisma as any).skinInventory.upsert({
@@ -86,6 +101,70 @@ router.get("/profile", authenticateToken, async (req: AuthenticatedRequest, res:
   } catch (error) {
     console.error("[PlayerRoute] Failed to load profile:", error);
     return res.status(500).json({ error: "Unable to load player profile." });
+  }
+});
+
+router.get("/transactions", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  const currencyType = Array.isArray(req.query.currencyType) ? req.query.currencyType[0] : req.query.currencyType;
+  const type = Array.isArray(req.query.type) ? req.query.type[0] : req.query.type;
+  const limit = parsePaginationValue(req.query.limit, DEFAULT_TRANSACTION_LIMIT, 1, MAX_TRANSACTION_LIMIT);
+  const offset = parsePaginationValue(req.query.offset, 0);
+
+  if (currencyType && !VALID_TRANSACTION_CURRENCY_TYPES.has(String(currencyType))) {
+    return res.status(400).json({ error: "Invalid currencyType." });
+  }
+
+  if (type && !VALID_TRANSACTION_TYPES.has(String(type))) {
+    return res.status(400).json({ error: "Invalid transaction type." });
+  }
+
+  const where: any = {
+    userId: req.user!.userId,
+  };
+
+  if (currencyType) {
+    where.currencyType = String(currencyType);
+  }
+
+  if (type) {
+    where.type = String(type);
+  }
+
+  try {
+    const [transactions, total] = await (prisma as any).$transaction([
+      (prisma as any).currencyTransaction.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take: limit,
+        select: {
+          id: true,
+          currencyType: true,
+          type: true,
+          amount: true,
+          balanceBefore: true,
+          balanceAfter: true,
+          status: true,
+          txHash: true,
+          chainId: true,
+          contractAddress: true,
+          referenceId: true,
+          note: true,
+          createdAt: true,
+        },
+      }),
+      (prisma as any).currencyTransaction.count({ where }),
+    ]);
+
+    return res.json({
+      transactions,
+      limit,
+      offset,
+      total,
+    });
+  } catch (error) {
+    console.error("[PlayerRoute] Failed to load transactions:", error);
+    return res.status(500).json({ error: "Unable to load player transactions." });
   }
 });
 
