@@ -27,6 +27,7 @@ const gameServer = new Server({
 });
 
 gameServer.define("battle", BattleRoom);
+gameServer.define("airdrop", BattleRoom, { mode: "airdrop" });
 
 gameServer.listen(port)
     .then(() => console.log(`[GameServer] Listening on Port: ${port}`))

@@ -15,4 +15,5 @@ export class PlayerState extends Schema {
   @type("number") kills: number = 0;
   @type("boolean") isDead: boolean = false;
   @type("string") skinId: string = "Female01";
+  @type("number") vecCarried: number = 0;
 }

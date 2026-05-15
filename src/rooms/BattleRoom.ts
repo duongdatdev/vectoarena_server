@@ -43,6 +43,10 @@ const PRISMA_WEAPON_TYPE_BY_RUNTIME_NAME: Record<string, PrismaWeaponType> = {
 
 export class BattleRoom extends Room<{ state: GameState }> {
   private static readonly DEFAULT_MELEE_WEAPON = "Sword";
+  private static readonly AIRDROP_MIN_LEVEL = 5;
+  private static readonly CARRIED_VEC_DROP_CHANCE = 0.7;
+  private static readonly BONUS_VEC_DROP_CHANCE = 0.2;
+  private static readonly VEC_ITEM_TYPE = "VEC";
   private zoneManager!: ZoneManager;
   private static readonly MAX_PLAYER_HP = 100;
   private static readonly ACCEPTED_SHOT_TTL_MS = 2_000;
@@ -77,6 +81,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private participantBySessionId = new Map<string, string>();
   private placementBySessionId = new Map<string, number>();
   private finalizedMatchResults = false;
+  private isAirdropMode = false;
 
   private toPrismaWeaponType(weapon: string): PrismaWeaponType | null {
     return PRISMA_WEAPON_TYPE_BY_RUNTIME_NAME[weapon] ?? null;
@@ -87,7 +92,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const match = await (prisma as any).match.create({
         data: {
           roomCode: this.roomId,
-          mode: "BATTLE",
+          mode: this.isAirdropMode ? "PLAY_TO_AIRDROP" : "BATTLE",
           status: "WAITING",
           maxPlayers: this.maxClients,
         },
@@ -145,12 +150,15 @@ export class BattleRoom extends Room<{ state: GameState }> {
           sessionId: true,
           kills: true,
           deaths: true,
+          vecCarried: true,
           rewardXp: true,
+          rewardVec: true,
           leaveAt: true,
         },
       });
 
       const shouldAwardXp = status === "FINISHED" && Boolean(match.startedAt);
+      const shouldAwardVec = this.isAirdropMode && status === "FINISHED" && Boolean(match.startedAt);
       const maxPlayers = Math.max(1, match.maxPlayers ?? this.maxClients);
       const matchResultMessages: Array<{ sessionId: string; payload: Record<string, number | boolean> }> = [];
 
@@ -170,6 +178,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
             participant.leaveAt && match.startedAt && participant.leaveAt < match.startedAt
           );
           let rewardXp = 0;
+          const statePlayer = this.state.players.get(participant.sessionId);
+          const vecCarried = Math.max(0, Math.floor(statePlayer?.vecCarried ?? participant.vecCarried ?? 0));
+          let rewardVec = 0;
+          let progressionPayload: Record<string, number | boolean> | null = null;
 
           if (shouldAwardXp && !leftBeforeMatchStarted && participant.userId && participant.rewardXp === 0) {
             rewardXp = ProgressionManager.calculateMatchXp({
@@ -207,21 +219,61 @@ export class BattleRoom extends Room<{ state: GameState }> {
                 },
               });
 
-              matchResultMessages.push({
-                sessionId: participant.sessionId,
-                payload: {
-                  placement,
-                  kills: participant.kills,
-                  xpEarned: rewardXp,
-                  level: progression.level,
-                  xp: progression.xp,
-                  xpToNextLevel: progression.xpToNextLevel,
-                  xpProgress: progression.xpProgress,
-                  levelsGained: progression.levelsGained,
-                  isWinner,
-                },
-              });
+              progressionPayload = {
+                xpEarned: rewardXp,
+                level: progression.level,
+                xp: progression.xp,
+                xpToNextLevel: progression.xpToNextLevel,
+                xpProgress: progression.xpProgress,
+                levelsGained: progression.levelsGained,
+              };
             }
+          }
+
+          if (shouldAwardVec && !leftBeforeMatchStarted && participant.userId && participant.rewardVec === 0) {
+            rewardVec = vecCarried;
+            if (rewardVec > 0) {
+              const user = await tx.user.findUnique({
+                where: { id: participant.userId },
+                select: { vecBalance: true },
+              });
+
+              if (user) {
+                await tx.user.update({
+                  where: { id: participant.userId },
+                  data: {
+                    vecBalance: { increment: rewardVec },
+                  },
+                });
+
+                await tx.currencyTransaction.create({
+                  data: {
+                    userId: participant.userId,
+                    currencyType: "VEC",
+                    type: "MATCH_REWARD",
+                    amount: rewardVec,
+                    balanceBefore: user.vecBalance,
+                    balanceAfter: user.vecBalance + rewardVec,
+                    status: "OFFCHAIN_ONLY",
+                    referenceId: matchId,
+                    note: "Play to Airdrop match reward",
+                  },
+                });
+              }
+            }
+          }
+
+          if (participant.userId && (progressionPayload || this.isAirdropMode)) {
+            matchResultMessages.push({
+              sessionId: participant.sessionId,
+              payload: {
+                placement,
+                kills: participant.kills,
+                vecEarned: rewardVec,
+                ...(progressionPayload ?? {}),
+                isWinner,
+              },
+            });
           }
 
           await tx.matchParticipant.update({
@@ -229,7 +281,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
             data: {
               placement,
               isWinner,
+              vecCarried,
               rewardXp: rewardXp > 0 ? rewardXp : participant.rewardXp,
+              rewardVec: rewardVec > 0 ? rewardVec : participant.rewardVec,
             },
           });
         }
@@ -376,6 +430,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
       ItemSpawner.spawnItemAt(this.state, "MedicalKit", victim.x + 0.5, victim.z + 0.5);
     }
 
+    if (this.isAirdropMode) {
+      this.rollVecDropsOnDeath(victimId, victim, victim.x, victim.z);
+    }
+
     if (this.state.aliveCount <= 1 && this.state.matchState === "PLAYING") {
       setTimeout(() => {
         if (this.state.matchState === "PLAYING") {
@@ -384,6 +442,35 @@ export class BattleRoom extends Room<{ state: GameState }> {
           void this.finalizeMatch("FINISHED");
         }
       }, 3000); 
+    }
+  }
+
+  private rollVecDropsOnDeath(victimId: string, victim: any, x: number, z: number): void {
+    let dropIndex = 0;
+    let carriedVecDropped = 0;
+
+    if (victim.vecCarried > 0 && Math.random() < BattleRoom.CARRIED_VEC_DROP_CHANCE) {
+      victim.vecCarried = Math.max(0, victim.vecCarried - 1);
+      ItemSpawner.spawnItemAt(this.state, BattleRoom.VEC_ITEM_TYPE, x + dropIndex * 0.35, z);
+      dropIndex += 1;
+      carriedVecDropped += 1;
+    }
+
+    if (Math.random() < BattleRoom.BONUS_VEC_DROP_CHANCE) {
+      ItemSpawner.spawnItemAt(this.state, BattleRoom.VEC_ITEM_TYPE, x + dropIndex * 0.35, z);
+    }
+
+    if (carriedVecDropped > 0) {
+      const participantId = this.participantBySessionId.get(victimId);
+      if (participantId) {
+        void (prisma as any).matchParticipant.update({
+          where: { id: participantId },
+          data: {
+            vecDropped: { increment: carriedVecDropped },
+            vecCarried: victim.vecCarried,
+          },
+        }).catch((error: unknown) => console.error("[BattleRoom] Failed to record VEC death drop:", error));
+      }
     }
   }
 
@@ -486,7 +573,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return BattleRoom.MAX_MOVE_SPEED * BattleRoom.MOVE_SPEED_GRACE_MULTIPLIER * (elapsedMs / 1000);
   }
 
-  async onCreate() {
+  async onCreate(options?: any) {
+    this.isAirdropMode = options?.mode === "airdrop";
     const runtimeConfig = await ConfigService.loadActiveConfig();
 
     this.maxClients = runtimeConfig.maxPlayers;
@@ -498,7 +586,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     this.setState(new GameState());
     console.log(
-      `[BattleRoom] Room created with config ${runtimeConfig.profileCode} (maxPlayers=${this.maxClients}, spawn=${runtimeConfig.initialSpawnCount})`
+      `[BattleRoom] Room created with config ${runtimeConfig.profileCode} (mode=${this.isAirdropMode ? "PLAY_TO_AIRDROP" : "BATTLE"}, maxPlayers=${this.maxClients}, spawn=${runtimeConfig.initialSpawnCount})`
     );
 
     this.zoneManager = new ZoneManager(this.state);
@@ -760,7 +848,19 @@ export class BattleRoom extends Room<{ state: GameState }> {
         return;
       }
 
-      if (item.type === "MedicalKit") {
+      if (item.type === BattleRoom.VEC_ITEM_TYPE) {
+        player.vecCarried += 1;
+        const participantId = this.participantBySessionId.get(client.sessionId);
+        if (participantId) {
+          void (prisma as any).matchParticipant.update({
+            where: { id: participantId },
+            data: {
+              vecCollected: { increment: 1 },
+              vecCarried: player.vecCarried,
+            },
+          }).catch((error: unknown) => console.error("[BattleRoom] Failed to record VEC pickup:", error));
+        }
+      } else if (item.type === "MedicalKit") {
         player.hp = Math.min(player.hp + this.medicalKitHeal, BattleRoom.MAX_PLAYER_HP);
       } else {
         const weaponConfig = this.getWeaponConfig(item.type);
@@ -781,8 +881,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
         playerId: client.sessionId,
         itemId,
         itemType: item.type,
-        fireRate: item.type === "MedicalKit" ? 0 : 1 / (this.getWeaponConfig(item.type)?.fireRatePerSecond ?? 1),
-        maxAmmo: item.type === "MedicalKit" ? 0 : this.getWeaponConfig(item.type)?.maxAmmo ?? 0,
+        fireRate: item.type === "MedicalKit" || item.type === BattleRoom.VEC_ITEM_TYPE ? 0 : 1 / (this.getWeaponConfig(item.type)?.fireRatePerSecond ?? 1),
+        maxAmmo: item.type === "MedicalKit" || item.type === BattleRoom.VEC_ITEM_TYPE ? 0 : this.getWeaponConfig(item.type)?.maxAmmo ?? 0,
       });
     });
   }
@@ -803,6 +903,22 @@ export class BattleRoom extends Room<{ state: GameState }> {
   }
 
   async onJoin(client: Client, options: any) {
+    if (this.isAirdropMode) {
+      const userId = (client as any).userId as string | undefined;
+      if (!userId) {
+        throw new Error("Play to Airdrop requires an authenticated account.");
+      }
+
+      const user = await (prisma as any).user.findUnique({
+        where: { id: userId },
+        select: { level: true },
+      });
+
+      if (!user || user.level < BattleRoom.AIRDROP_MIN_LEVEL) {
+        throw new Error(`Play to Airdrop unlocks at level ${BattleRoom.AIRDROP_MIN_LEVEL}.`);
+      }
+    }
+
     const player = PlayerSpawner.createPlayer(client, options, this.clients.length);
     player.skinId = await this.getEquippedPlayerSkin(client);
     this.state.players.set(client.sessionId, player);
