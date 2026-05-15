@@ -30,6 +30,14 @@ export type RuntimeGameConfig = {
   profileCode: string;
   maxPlayers: number;
   initialSpawnCount: number;
+  minHumanPlayersToStart: number;
+  botCount: number;
+  botFillDelayMs: number;
+  botMoveSpeed: number;
+  botAggroRange: number;
+  botMeleeRange: number;
+  botAttackCooldownMs: number;
+  botThinkIntervalMs: number;
   maxHitDistance: number;
   maxItemPickupDistance: number;
   medicalKitHeal: number;
@@ -47,8 +55,16 @@ export class ConfigService {
   private static getDefaultConfig(): RuntimeGameConfig {
     return {
       profileCode: "fallback_default",
-      maxPlayers: 2,
+      maxPlayers: 4,
       initialSpawnCount: 20,
+      minHumanPlayersToStart: 2,
+      botCount: 2,
+      botFillDelayMs: 15000,
+      botMoveSpeed: 2.6,
+      botAggroRange: 18,
+      botMeleeRange: 2.5,
+      botAttackCooldownMs: 900,
+      botThinkIntervalMs: 100,
       maxHitDistance: 60,
       maxItemPickupDistance: 3,
       medicalKitHeal: 30,
@@ -91,6 +107,10 @@ export class ConfigService {
     return typeof value === "number" && Number.isFinite(value) && value > 0;
   }
 
+  private static isNonNegativeInteger(value: unknown): value is number {
+    return typeof value === "number" && Number.isInteger(value) && value >= 0;
+  }
+
   private static readJsonConfig(): Partial<RuntimeGameConfig> | null {
     if (!fs.existsSync(this.CONFIG_PATH)) {
       return null;
@@ -122,6 +142,30 @@ export class ConfigService {
       }
       if (this.isPositiveInteger(fileConfig.initialSpawnCount)) {
         config.initialSpawnCount = fileConfig.initialSpawnCount;
+      }
+      if (this.isPositiveInteger(fileConfig.minHumanPlayersToStart)) {
+        config.minHumanPlayersToStart = fileConfig.minHumanPlayersToStart;
+      }
+      if (this.isNonNegativeInteger(fileConfig.botCount)) {
+        config.botCount = fileConfig.botCount;
+      }
+      if (this.isPositiveInteger(fileConfig.botFillDelayMs)) {
+        config.botFillDelayMs = fileConfig.botFillDelayMs;
+      }
+      if (this.isPositiveNumber(fileConfig.botMoveSpeed)) {
+        config.botMoveSpeed = fileConfig.botMoveSpeed;
+      }
+      if (this.isPositiveNumber(fileConfig.botAggroRange)) {
+        config.botAggroRange = fileConfig.botAggroRange;
+      }
+      if (this.isPositiveNumber(fileConfig.botMeleeRange)) {
+        config.botMeleeRange = fileConfig.botMeleeRange;
+      }
+      if (this.isPositiveInteger(fileConfig.botAttackCooldownMs)) {
+        config.botAttackCooldownMs = fileConfig.botAttackCooldownMs;
+      }
+      if (this.isPositiveInteger(fileConfig.botThinkIntervalMs)) {
+        config.botThinkIntervalMs = fileConfig.botThinkIntervalMs;
       }
       if (this.isPositiveNumber(fileConfig.maxHitDistance)) {
         config.maxHitDistance = fileConfig.maxHitDistance;

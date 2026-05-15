@@ -5,6 +5,7 @@ import { AuthManager } from "../managers/AuthManager";
 import { PlayerSpawner } from "../managers/PlayerSpawner";
 import { ItemSpawner } from "../managers/ItemSpawner";
 import { ConfigService, WeaponConfig, WeaponConfigs } from "../managers/ConfigService";
+import { BotManager } from "../managers/BotManager";
 import prisma from "../database/prisma";
 import { DEFAULT_PLAYER_SKIN_ID } from "../managers/SkinCatalog";
 import { ProgressionManager } from "../managers/ProgressionManager";
@@ -57,6 +58,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private static readonly MAX_MOVE_SPEED = 3.5;
   private static readonly MOVE_SPEED_GRACE_MULTIPLIER = 1.35;
   private static readonly MAX_MOVE_DELTA_TIME_MS = 250;
+  private botManager: BotManager | null = null;
+  private minHumanPlayersToStart = 1;
+  private botFillDelayMs = 15000;
+  private botFillTimer: NodeJS.Timeout | null = null;
   private maxItemPickupDistance = 3;
   private medicalKitHeal = 30;
   private maxHitDistance = 60;
@@ -82,6 +87,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private placementBySessionId = new Map<string, number>();
   private finalizedMatchResults = false;
   private isAirdropMode = false;
+  private gameOverQueued = false;
 
   private toPrismaWeaponType(weapon: string): PrismaWeaponType | null {
     return PRISMA_WEAPON_TYPE_BY_RUNTIME_NAME[weapon] ?? null;
@@ -126,6 +132,119 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (player && !player.isDead) return 1;
 
     return Math.max(1, this.maxClients);
+  }
+
+  private getHumanPlayerCount(): number {
+    let count = 0;
+    this.state.players.forEach((_, sessionId) => {
+      if (!BotManager.isBotId(sessionId)) {
+        count += 1;
+      }
+    });
+    return count;
+  }
+
+  private getAliveCombatantCount(): number {
+    let count = 0;
+    this.state.players.forEach((player) => {
+      if (!player.isDead && player.hp > 0) {
+        count += 1;
+      }
+    });
+    return count;
+  }
+
+  private tryStartMatch(): void {
+    if (this.state.matchState !== "WAITING") return;
+    const humanPlayerCount = this.getHumanPlayerCount();
+    if (humanPlayerCount < this.maxClients) return;
+
+    this.startMatch();
+  }
+
+  private scheduleBotFillIfNeeded(): void {
+    if (this.state.matchState !== "WAITING") return;
+
+    const humanPlayerCount = this.getHumanPlayerCount();
+    if (humanPlayerCount >= this.maxClients) {
+      this.clearBotFillTimer();
+      this.startMatch();
+      return;
+    }
+
+    if (humanPlayerCount < this.minHumanPlayersToStart) {
+      this.clearBotFillTimer();
+      return;
+    }
+
+    if (this.botFillTimer) {
+      return;
+    }
+
+    this.botFillTimer = setTimeout(() => {
+      this.botFillTimer = null;
+      this.fillBotsAndStartMatch();
+    }, this.botFillDelayMs);
+  }
+
+  private clearBotFillTimer(): void {
+    if (!this.botFillTimer) return;
+
+    clearTimeout(this.botFillTimer);
+    this.botFillTimer = null;
+  }
+
+  private fillBotsAndStartMatch(): void {
+    if (this.state.matchState !== "WAITING") return;
+
+    const humanPlayerCount = this.getHumanPlayerCount();
+    if (humanPlayerCount >= this.maxClients) {
+      this.startMatch();
+      return;
+    }
+
+    if (humanPlayerCount < this.minHumanPlayersToStart) {
+      return;
+    }
+
+    const missingCombatants = Math.max(0, this.maxClients - humanPlayerCount);
+    const spawnedBotCount = this.botManager?.spawnBots(missingCombatants) ?? 0;
+    if (humanPlayerCount + spawnedBotCount < this.maxClients) {
+      console.warn(
+        `[BattleRoom] Bot fill skipped start: humans=${humanPlayerCount}, bots=${spawnedBotCount}, maxPlayers=${this.maxClients}`
+      );
+      return;
+    }
+
+    this.startMatch();
+  }
+
+  private startMatch(): void {
+    if (this.state.matchState !== "WAITING") return;
+
+    this.clearBotFillTimer();
+    this.lock();
+    this.state.matchState = "PLAYING";
+    this.state.aliveCount = this.getAliveCombatantCount();
+    this.broadcast("GAME_START");
+    void this.setMatchPlaying();
+  }
+
+  private queueGameOverIfNeeded(delayMs: number = 3000): void {
+    if (this.gameOverQueued || this.state.aliveCount > 1 || this.state.matchState !== "PLAYING") {
+      return;
+    }
+
+    this.gameOverQueued = true;
+    setTimeout(() => this.finishPlayingMatch(), delayMs);
+  }
+
+  private finishPlayingMatch(): void {
+    if (this.state.matchState !== "PLAYING") return;
+
+    this.state.matchState = "FINISHED";
+    this.broadcast("GAME_OVER");
+    void this.finalizeMatch("FINISHED");
   }
 
   private async finalizeMatch(status: "FINISHED" | "ABANDONED"): Promise<void> {
@@ -362,7 +481,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
     const killerParticipantId = this.participantBySessionId.get(killerSessionId) ?? null;
     const victimParticipantId = this.participantBySessionId.get(victimSessionId);
-    if (!victimParticipantId) return;
+    if (!victimParticipantId) {
+      if (killerParticipantId) {
+        await (prisma as any).matchParticipant.update({
+          where: { id: killerParticipantId },
+          data: {
+            kills: { increment: 1 },
+            damageDealt: { increment: damage },
+          },
+        });
+      }
+      return;
+    }
 
     const prismaWeaponType = this.toPrismaWeaponType(weapon);
 
@@ -434,15 +564,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       this.rollVecDropsOnDeath(victimId, victim, victim.x, victim.z);
     }
 
-    if (this.state.aliveCount <= 1 && this.state.matchState === "PLAYING") {
-      setTimeout(() => {
-        if (this.state.matchState === "PLAYING") {
-          this.state.matchState = "FINISHED";
-          this.broadcast("GAME_OVER");
-          void this.finalizeMatch("FINISHED");
-        }
-      }, 3000); 
-    }
+    this.queueGameOverIfNeeded();
   }
 
   private rollVecDropsOnDeath(victimId: string, victim: any, x: number, z: number): void {
@@ -583,15 +705,36 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.maxHitDistance = runtimeConfig.maxHitDistance;
     this.reconnectTimeoutSeconds = runtimeConfig.reconnectTimeoutSeconds;
     this.weaponConfigs = runtimeConfig.weapons;
+    this.minHumanPlayersToStart = Math.min(runtimeConfig.minHumanPlayersToStart, runtimeConfig.maxPlayers);
+    this.botFillDelayMs = runtimeConfig.botFillDelayMs;
 
     this.setState(new GameState());
     console.log(
-      `[BattleRoom] Room created with config ${runtimeConfig.profileCode} (mode=${this.isAirdropMode ? "PLAY_TO_AIRDROP" : "BATTLE"}, maxPlayers=${this.maxClients}, spawn=${runtimeConfig.initialSpawnCount})`
+      `[BattleRoom] Room created with config ${runtimeConfig.profileCode} (mode=${this.isAirdropMode ? "PLAY_TO_AIRDROP" : "BATTLE"}, maxPlayers=${this.maxClients}, spawn=${runtimeConfig.initialSpawnCount}, maxBots=${runtimeConfig.botCount}, botFillDelayMs=${runtimeConfig.botFillDelayMs})`
     );
 
     this.zoneManager = new ZoneManager(this.state);
     this.zoneManager.initializeZone();
-    this.setSimulationInterval(() => this.zoneManager.updateZone(), 100);
+    this.botManager = new BotManager({
+      state: this.state,
+      botCount: runtimeConfig.botCount,
+      moveSpeed: runtimeConfig.botMoveSpeed,
+      aggroRange: runtimeConfig.botAggroRange,
+      meleeRange: runtimeConfig.botMeleeRange,
+      meleeDamage: BattleRoom.MELEE_DAMAGE,
+      attackCooldownMs: runtimeConfig.botAttackCooldownMs,
+      meleeWeapon: BattleRoom.DEFAULT_MELEE_WEAPON,
+      onMeleeAttack: (attackerId, targetId) => {
+        this.broadcast("melee_attack", { attackerId, targetId });
+      },
+      onTargetKilled: (victimId, killerId, weapon, damage) => {
+        this.handlePlayerDeath(victimId, killerId, weapon, damage);
+      },
+    });
+    this.setSimulationInterval((deltaTime) => {
+      this.zoneManager.updateZone();
+      this.botManager?.update(deltaTime);
+    }, Math.min(100, runtimeConfig.botThinkIntervalMs));
 
     ItemSpawner.spawnInitialItems(this.state, runtimeConfig.initialSpawnCount, runtimeConfig.itemSpawnWeights);
     void this.createMatchRecord();
@@ -926,13 +1069,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     
     console.log(`[BattleRoom] Client joined: ${client.sessionId} (Username: ${player.username})`);
 
-    if (this.clients.length === this.maxClients) {
-      this.lock();
-      this.state.matchState = "PLAYING";
-      this.state.aliveCount = this.clients.length;
-      this.broadcast("GAME_START");
-      void this.setMatchPlaying();
-    }
+    this.tryStartMatch();
+    this.scheduleBotFillIfNeeded();
   }
 
   async onLeave(client: Client, code?: number) {
@@ -967,21 +1105,28 @@ export class BattleRoom extends Room<{ state: GameState }> {
     void this.markParticipantLeft(client.sessionId);
     console.log(`[BattleRoom] Client permanently left: ${username}`);
 
-    if (this.state.players.size === 0) {
+    if (this.getHumanPlayerCount() === 0) {
+      this.clearBotFillTimer();
       const finalStatus = this.state.matchState === "PLAYING" ? "FINISHED" : "ABANDONED";
+      if (this.state.matchState === "PLAYING") {
+        this.state.matchState = "FINISHED";
+      }
       void this.finalizeMatch(finalStatus);
     }
 
     if (this.state.players.size > 0 && this.state.aliveCount <= 1 && this.state.matchState === "PLAYING") {
-      this.state.matchState = "FINISHED";
-      this.broadcast("GAME_OVER");
-      void this.finalizeMatch("FINISHED");
+      this.finishPlayingMatch();
     }
 
     if (this.state.matchState !== "PLAYING") {
       this.unlock();
+      this.scheduleBotFillIfNeeded();
       console.log(`[BattleRoom] Room unlocked since match hasn't started and a player left.`);
     }
+  }
+
+  onDispose() {
+    this.clearBotFillTimer();
   }
 }
 
