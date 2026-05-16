@@ -57,7 +57,8 @@ async function buildPlayerProfile(userId: string) {
       id: true,
       username: true,
       walletAddress: true,
-      vecBalance: true,
+      vecUnlockedBalance: true,
+      vecLockedBalance: true,
       coinBalance: true,
       level: true,
       xp: true,
@@ -79,7 +80,8 @@ async function buildPlayerProfile(userId: string) {
   return {
     username: user.username,
     walletAddress: user.walletAddress,
-    vecBalance: user.vecBalance,
+    vecUnlockedBalance: user.vecUnlockedBalance,
+    vecLockedBalance: user.vecLockedBalance,
     coinBalance: user.coinBalance,
     ...ProgressionManager.buildResult(user.level, user.xp),
     equippedPlayerSkin,
@@ -142,6 +144,7 @@ router.get("/transactions", authenticateToken, async (req: AuthenticatedRequest,
         select: {
           id: true,
           currencyType: true,
+          vecBucket: true,
           type: true,
           amount: true,
           balanceBefore: true,
@@ -221,20 +224,24 @@ router.post("/buy-skin", authenticateToken, async (req: AuthenticatedRequest, re
       if (!existingSkin) {
         const user = await tx.user.findUnique({
           where: { id: req.user!.userId },
-          select: { coinBalance: true },
+          select: { coinBalance: true, vecUnlockedBalance: true },
         });
 
         if (!user) {
           throw new Error("USER_NOT_FOUND");
         }
 
-        if (user.coinBalance < skin.price) {
-          throw new Error("NOT_ENOUGH_COINS");
+        const isVecPurchase = skin.currencyType === "VEC";
+        const balanceBefore = isVecPurchase ? user.vecUnlockedBalance : user.coinBalance;
+        if (balanceBefore < skin.price) {
+          throw new Error(isVecPurchase ? "NOT_ENOUGH_VEC" : "NOT_ENOUGH_COINS");
         }
 
         await tx.user.update({
           where: { id: req.user!.userId },
-          data: { coinBalance: { decrement: skin.price } },
+          data: isVecPurchase
+            ? { vecUnlockedBalance: { decrement: skin.price } }
+            : { coinBalance: { decrement: skin.price } },
         });
 
         await tx.skinInventory.create({
@@ -249,11 +256,12 @@ router.post("/buy-skin", authenticateToken, async (req: AuthenticatedRequest, re
         await tx.currencyTransaction.create({
           data: {
             userId: req.user!.userId,
-            currencyType: "COIN",
+            currencyType: skin.currencyType,
+            vecBucket: isVecPurchase ? "UNLOCKED" : null,
             type: "PURCHASE",
             amount: -skin.price,
-            balanceBefore: user.coinBalance,
-            balanceAfter: user.coinBalance - skin.price,
+            balanceBefore,
+            balanceAfter: balanceBefore - skin.price,
             status: "OFFCHAIN_ONLY",
             referenceId: skin.id,
             note: `Purchased player skin ${skin.id}`,
@@ -272,6 +280,10 @@ router.post("/buy-skin", authenticateToken, async (req: AuthenticatedRequest, re
   } catch (error) {
     if (error instanceof Error && error.message === "NOT_ENOUGH_COINS") {
       return res.status(400).json({ error: "Not enough coins." });
+    }
+
+    if (error instanceof Error && error.message === "NOT_ENOUGH_VEC") {
+      return res.status(400).json({ error: "Not enough unlocked VEC." });
     }
 
     if (error instanceof Error && error.message === "USER_NOT_FOUND") {

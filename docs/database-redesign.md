@@ -62,14 +62,15 @@ Ly do:
 
 ### 3.1 User
 
-`User.vecBalance` doi tu `Float` sang `Int` de tranh sai so so hoc.
+`User.vecUnlockedBalance` va `User.vecLockedBalance` dung `Int` de tranh sai so so hoc.
 
 `User.coinBalance` la soft currency off-chain dung cho shop skin hien tai, mac dinh 1500 coin cho tai khoan moi.
 
 Quy uoc:
 
 - `coinBalance`: tien giao dich truoc mat trong shop, khong lien quan blockchain.
-- `vecBalance`: giu cho VEC/Web3 sau nay, chi dung cho reward blockchain hoac mot so skin dac biet can VEC.
+- `vecUnlockedBalance`: VEC nap tu deposit, dung cho shop/NFT/cosmetic tieu thu.
+- `vecLockedBalance`: VEC nhan trong game/Play-to-Airdrop, chi tich luy cho airdrop.
 
 Them:
 
@@ -158,6 +159,7 @@ Nen dung `Int` cho amount/balance:
 
 ```prisma
 currencyType  CurrencyType
+vecBucket     VecBucket?
 amount        Int
 balanceBefore Int
 balanceAfter  Int
@@ -204,8 +206,8 @@ Flow:
 
 1. Server tinh `rewardVec`.
 2. Server update `MatchParticipant.rewardVec`.
-3. Server update `User.vecBalance`.
-4. Server tao `CurrencyTransaction` voi `currencyType = VEC`.
+3. Server update `User.vecLockedBalance`.
+4. Server tao `CurrencyTransaction` voi `currencyType = VEC`, `vecBucket = LOCKED`.
 5. Neu bat Sepolia, transaction ban dau la `PENDING`.
 6. Khi co ket qua blockchain, update `txHash` va `status`.
 
@@ -270,7 +272,7 @@ enum ItemType {
 3. Bo ghi `MatchItemPickup`.
 4. Them alive/dead va finalize placement.
 5. Cap nhat `MatchParticipant.rewardVec`, `vecCollected`, `vecDropped`, `vecCarried`.
-6. Tao `CurrencyTransaction` khi cong VEC vao wallet.
+6. Tao `CurrencyTransaction` khi cong VEC khoa vao tai khoan.
 7. Them shop/inventory su dung `SkinInventory`.
 8. Neu demo Web3, update `txHash` va `status` sau khi goi Sepolia.
 

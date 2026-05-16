@@ -76,7 +76,7 @@ router.post('/deposit', authenticateToken, async (req: Request, res: Response): 
         const amount = await web3Manager.verifyDeposit(txHash, user.walletAddress, userId);
 
         if (amount !== null && amount > 0) {
-            return res.status(200).json({ success: true, amount, newBalance: user.vecBalance + amount });
+            return res.status(200).json({ success: true, amount, newUnlockedBalance: user.vecUnlockedBalance + amount });
         } else {
             return res.status(400).json({ error: "Invalid transaction or deposit not verified" });
         }

@@ -354,14 +354,14 @@ export class BattleRoom extends Room<{ state: GameState }> {
             if (rewardVec > 0) {
               const user = await tx.user.findUnique({
                 where: { id: participant.userId },
-                select: { vecBalance: true },
+                select: { vecLockedBalance: true },
               });
 
               if (user) {
                 await tx.user.update({
                   where: { id: participant.userId },
                   data: {
-                    vecBalance: { increment: rewardVec },
+                    vecLockedBalance: { increment: rewardVec },
                   },
                 });
 
@@ -369,10 +369,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
                   data: {
                     userId: participant.userId,
                     currencyType: "VEC",
+                    vecBucket: "LOCKED",
                     type: "MATCH_REWARD",
                     amount: rewardVec,
-                    balanceBefore: user.vecBalance,
-                    balanceAfter: user.vecBalance + rewardVec,
+                    balanceBefore: user.vecLockedBalance,
+                    balanceAfter: user.vecLockedBalance + rewardVec,
                     status: "OFFCHAIN_ONLY",
                     referenceId: matchId,
                     note: "Play to Airdrop match reward",

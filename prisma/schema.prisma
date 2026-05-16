@@ -11,7 +11,8 @@ model User {
   username       String                @unique @db.VarChar(32)
   password       String                @db.VarChar(255)
   displayName    String?               @db.VarChar(64)
-  vecBalance     Int                   @default(0)
+  vecUnlockedBalance Int                @default(0)
+  vecLockedBalance   Int                @default(0)
   coinBalance    Int                   @default(1500)
   walletAddress  String?               @db.VarChar(64)
   level          Int                   @default(1)
@@ -128,6 +129,7 @@ model CurrencyTransaction {
   id              String            @id @default(uuid()) @db.Uuid
   userId          String            @db.Uuid
   currencyType    CurrencyType      @default(COIN)
+  vecBucket       VecBucket?
   type            TransactionType
   amount          Int
   balanceBefore   Int
@@ -216,6 +218,11 @@ enum TransactionStatus {
 enum CurrencyType {
   COIN
   VEC
+}
+
+enum VecBucket {
+  UNLOCKED
+  LOCKED
 }
 
 enum SkinType {

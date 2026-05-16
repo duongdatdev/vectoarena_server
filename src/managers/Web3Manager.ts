@@ -78,17 +78,18 @@ export class Web3Manager {
 
                         await tx.user.update({
                             where: { id: userId },
-                            data: { vecBalance: { increment: finalAmount } }
+                            data: { vecUnlockedBalance: { increment: finalAmount } }
                         });
 
                         await tx.currencyTransaction.create({
                             data: {
                                 userId: userId,
                                 currencyType: 'VEC',
+                                vecBucket: 'UNLOCKED',
                                 type: 'PURCHASE',
                                 amount: finalAmount,
-                                balanceBefore: user.vecBalance,
-                                balanceAfter: user.vecBalance + finalAmount,
+                                balanceBefore: user.vecUnlockedBalance,
+                                balanceAfter: user.vecUnlockedBalance + finalAmount,
                                 status: 'SUCCESS',
                                 txHash: txHash,
                                 chainId: 11155111,
