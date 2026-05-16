@@ -56,6 +56,7 @@ async function buildPlayerProfile(userId: string) {
     select: {
       id: true,
       username: true,
+      walletAddress: true,
       vecBalance: true,
       coinBalance: true,
       level: true,
@@ -77,6 +78,7 @@ async function buildPlayerProfile(userId: string) {
 
   return {
     username: user.username,
+    walletAddress: user.walletAddress,
     vecBalance: user.vecBalance,
     coinBalance: user.coinBalance,
     ...ProgressionManager.buildResult(user.level, user.xp),
