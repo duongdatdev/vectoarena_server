@@ -530,6 +530,39 @@ export class BattleRoom extends Room<{ state: GameState }> {
     }
   }
 
+  private async recordZoneDeath(victimSessionId: string, damage: number): Promise<void> {
+    if (!this.matchRecordId) return;
+
+    const victimParticipantId = this.participantBySessionId.get(victimSessionId);
+    if (!victimParticipantId) {
+      return;
+    }
+
+    try {
+      const roundedDamage = Math.max(1, Math.ceil(damage));
+      await (prisma as any).killEvent.create({
+        data: {
+          matchId: this.matchRecordId,
+          killerParticipantId: null,
+          victimParticipantId,
+          damage: roundedDamage,
+          weapon: null,
+          deathCause: "ZONE",
+        },
+      });
+
+      await (prisma as any).matchParticipant.update({
+        where: { id: victimParticipantId },
+        data: {
+          deaths: { increment: 1 },
+          damageTaken: { increment: roundedDamage },
+        },
+      });
+    } catch (error) {
+      console.error("[BattleRoom] Failed to record zone death:", error);
+    }
+  }
+
   private handlePlayerDeath(victimId: string, killerId: string, weapon: string, damage: number) {
     const victim = this.state.players.get(victimId);
     const killer = this.state.players.get(killerId);
@@ -556,6 +589,40 @@ export class BattleRoom extends Room<{ state: GameState }> {
       ItemSpawner.spawnItemAt(this.state, victim.rangedWeapon, victim.x, victim.z);
     }
     
+    if (Math.random() < 0.8) {
+      ItemSpawner.spawnItemAt(this.state, "MedicalKit", victim.x + 0.5, victim.z + 0.5);
+    }
+
+    if (this.isAirdropMode) {
+      this.rollVecDropsOnDeath(victimId, victim, victim.x, victim.z);
+    }
+
+    this.queueGameOverIfNeeded();
+  }
+
+  private handleZoneDeath(victimId: string, damage: number): void {
+    const victim = this.state.players.get(victimId);
+    if (!victim || victim.isDead) return;
+
+    victim.hp = 0;
+    victim.isDead = true;
+    this.state.aliveCount = Math.max(0, this.state.aliveCount - 1);
+    const victimPlacement = Math.max(1, this.state.aliveCount + 1);
+    this.placementBySessionId.set(victimId, victimPlacement);
+
+    console.log(`[BattleRoom] Player ${victim.username} died to the zone.`);
+    void this.recordZoneDeath(victimId, damage);
+
+    this.broadcast("kill_feed", {
+      killerName: "",
+      victimName: victim.username,
+      weapon: "Zone"
+    });
+
+    if (victim.rangedWeapon && victim.rangedWeapon.length > 0) {
+      ItemSpawner.spawnItemAt(this.state, victim.rangedWeapon, victim.x, victim.z);
+    }
+
     if (Math.random() < 0.8) {
       ItemSpawner.spawnItemAt(this.state, "MedicalKit", victim.x + 0.5, victim.z + 0.5);
     }
@@ -713,7 +780,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
       `[BattleRoom] Room created with config ${runtimeConfig.profileCode} (mode=${this.isAirdropMode ? "PLAY_TO_AIRDROP" : "BATTLE"}, maxPlayers=${this.maxClients}, spawn=${runtimeConfig.initialSpawnCount}, maxBots=${runtimeConfig.botCount}, botFillDelayMs=${runtimeConfig.botFillDelayMs})`
     );
 
-    this.zoneManager = new ZoneManager(this.state);
+    this.zoneManager = new ZoneManager(this.state, (victimId, damage) => {
+      this.handleZoneDeath(victimId, damage);
+    });
     this.zoneManager.initializeZone();
     this.botManager = new BotManager({
       state: this.state,

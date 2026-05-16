@@ -1,14 +1,18 @@
 import { GameState } from "../schema/GameState";
 import { ZoneState } from "../schema/ZoneState";
 
+type ZoneDeathHandler = (victimId: string, damage: number) => void;
+
 export class ZoneManager {
   private state: GameState;
   private zoneStartCenterX = 0;
   private zoneStartCenterZ = 0;
   private zoneStartRadius = 100;
+  private onPlayerKilledByZone?: ZoneDeathHandler;
 
-  constructor(state: GameState) {
+  constructor(state: GameState, onPlayerKilledByZone?: ZoneDeathHandler) {
     this.state = state;
+    this.onPlayerKilledByZone = onPlayerKilledByZone;
   }
 
   public initializeZone() {
@@ -97,18 +101,17 @@ export class ZoneManager {
     const damage = zone.currentDamagePerSecond * 0.1; // update loop is every 100ms
 
     this.state.players.forEach((player, sessionId) => {
-      if (player.hp <= 0) return; // Player is already dead
+      if (player.isDead || player.hp <= 0) return; // Player is already dead
 
       const dx = player.x - zone.currentCenterX;
       const dz = player.z - zone.currentCenterZ;
       const distance = Math.sqrt(dx * dx + dz * dz);
 
       if (distance > zone.currentRadius) {
-        player.hp -= damage;
+        player.hp = Math.max(0, player.hp - damage);
         if (player.hp <= 0) {
-          player.hp = 0;
           console.log(`[ZoneManager] Player ${player.username} (${sessionId}) died to the zone.`);
-          // TODO: Check if only 1 player remaining -> match ends
+          this.onPlayerKilledByZone?.(sessionId, damage);
         }
       }
     });
