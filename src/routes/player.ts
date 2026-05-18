@@ -3,13 +3,35 @@ import prisma from "../database/prisma";
 import { AuthenticatedRequest, authenticateToken } from "../middleware/auth";
 import { DEFAULT_PLAYER_SKIN_ID, getPlayerSkinById, PLAYER_SKIN_CATALOG } from "../managers/SkinCatalog";
 import { ProgressionManager } from "../managers/ProgressionManager";
-import { getSkinOwnershipType, userOwnsSkin } from "../managers/SkinOwnershipService";
+import { getSkinOwnershipType, userOwnsSkin, validateEquippedSkinOrFallback } from "../managers/SkinOwnershipService";
 
 const router = Router();
 const VALID_TRANSACTION_CURRENCY_TYPES = new Set(["VEC", "COIN"]);
 const VALID_TRANSACTION_TYPES = new Set(["PURCHASE", "MATCH_REWARD", "REFUND", "ADMIN_ADJUSTMENT"]);
 const DEFAULT_TRANSACTION_LIMIT = 20;
 const MAX_TRANSACTION_LIMIT = 100;
+
+type SkinOwnershipSource = "SKIN_INVENTORY" | "NFT_CACHE" | "NONE";
+
+type NftSkinCacheSummary = {
+  skinId: string;
+  chainId: number;
+  contractAddress: string;
+  tokenId: string;
+  balance: number;
+  lastSyncedAt: Date;
+  mapping?: {
+    standard: string;
+  } | null;
+};
+
+type NftMappingSummary = {
+  skinId: string;
+  chainId: number;
+  contractAddress: string;
+  tokenId: string;
+  standard: string;
+};
 
 function parsePaginationValue(value: unknown, fallback: number, min = 0, max?: number) {
   const rawValue = Array.isArray(value) ? value[0] : value;
@@ -52,39 +74,112 @@ async function ensureDefaultPlayerInventory(userId: string) {
 async function buildPlayerProfile(userId: string) {
   await ensureDefaultPlayerInventory(userId);
 
-  const user = await (prisma as any).user.findUnique({
-    where: { id: userId },
-    select: {
-      id: true,
-      username: true,
-      walletAddress: true,
-      vecUnlockedBalance: true,
-      vecLockedBalance: true,
-      coinBalance: true,
-      level: true,
-      xp: true,
-      loadout: true,
-      skinInventory: {
-        where: { skinType: "PLAYER" },
-        select: { skinCode: true },
+  const [user, activeNftMappings] = await (prisma as any).$transaction([
+    (prisma as any).user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        username: true,
+        walletAddress: true,
+        vecUnlockedBalance: true,
+        vecLockedBalance: true,
+        coinBalance: true,
+        level: true,
+        xp: true,
+        loadout: true,
+        skinInventory: {
+          where: { skinType: "PLAYER" },
+          select: { skinCode: true },
+        },
+        nftSkinCache: {
+          where: { balance: { gt: 0 } },
+          orderBy: { lastSyncedAt: "desc" },
+          select: {
+            skinId: true,
+            chainId: true,
+            contractAddress: true,
+            tokenId: true,
+            balance: true,
+            lastSyncedAt: true,
+            mapping: {
+              select: { standard: true },
+            },
+          },
+        },
       },
-      nftSkinCache: {
-        where: { balance: { gt: 0 } },
-        select: { skinId: true },
+    }),
+    (prisma as any).skinNftMapping.findMany({
+      where: { active: true },
+      select: {
+        skinId: true,
+        chainId: true,
+        contractAddress: true,
+        tokenId: true,
+        standard: true,
       },
-    },
-  });
+    }),
+  ]);
 
   if (!user) {
     return null;
   }
 
+  const inventorySkinSet = new Set(user.skinInventory.map((skin: { skinCode: string }) => skin.skinCode));
+  const nftCacheBySkinId = new Map<string, NftSkinCacheSummary>();
+  for (const cache of user.nftSkinCache as NftSkinCacheSummary[]) {
+    if (!nftCacheBySkinId.has(cache.skinId)) {
+      nftCacheBySkinId.set(cache.skinId, cache);
+    }
+  }
+
+  const nftMappingBySkinId = new Map<string, NftMappingSummary>();
+  for (const mapping of activeNftMappings as NftMappingSummary[]) {
+    if (!nftMappingBySkinId.has(mapping.skinId)) {
+      nftMappingBySkinId.set(mapping.skinId, mapping);
+    }
+  }
+
   const ownedSkinSet = new Set([
-    ...user.skinInventory.map((skin: { skinCode: string }) => skin.skinCode),
-    ...user.nftSkinCache.map((skin: { skinId: string }) => skin.skinId),
+    ...inventorySkinSet,
+    ...nftCacheBySkinId.keys(),
   ]);
   const ownedSkins = Array.from(ownedSkinSet);
-  const equippedPlayerSkin = user.loadout?.equippedPlayerSkin || DEFAULT_PLAYER_SKIN_ID;
+  const equippedSkinValidation = await validateEquippedSkinOrFallback(userId, user.loadout?.equippedPlayerSkin, {
+    updateLoadout: true,
+  });
+  const equippedPlayerSkin = equippedSkinValidation.skinId;
+  const skinOwnership = PLAYER_SKIN_CATALOG.map((skin) => {
+    const ownershipType = getSkinOwnershipType(skin);
+    const isNftSkin = ownershipType === "NFT";
+    const nftCache = isNftSkin ? nftCacheBySkinId.get(skin.id) : null;
+    const nftMapping = isNftSkin ? nftMappingBySkinId.get(skin.id) : null;
+    const owned = isNftSkin ? Boolean(nftCache && nftCache.balance > 0) : inventorySkinSet.has(skin.id);
+    const source: SkinOwnershipSource = owned ? (isNftSkin ? "NFT_CACHE" : "SKIN_INVENTORY") : "NONE";
+    const nftInfo =
+      isNftSkin && (nftCache || nftMapping)
+        ? {
+            chainId: nftCache?.chainId ?? nftMapping?.chainId ?? skin.nft?.chainId ?? null,
+            contractAddress: nftCache?.contractAddress ?? nftMapping?.contractAddress ?? skin.nft?.contractAddress ?? null,
+            tokenId: nftCache?.tokenId ?? nftMapping?.tokenId ?? skin.nft?.tokenId ?? null,
+            standard: nftCache?.mapping?.standard ?? nftMapping?.standard ?? null,
+            balance: nftCache?.balance ?? 0,
+            lastSyncedAt: nftCache?.lastSyncedAt ?? null,
+          }
+        : null;
+
+    return {
+      ...skin,
+      skinId: skin.id,
+      ownershipType,
+      owned,
+      canEquip: owned,
+      source,
+      equipped: equippedPlayerSkin === skin.id,
+      currencyType: skin.currencyType,
+      price: skin.price,
+      nftInfo,
+    };
+  });
 
   return {
     username: user.username,
@@ -95,11 +190,8 @@ async function buildPlayerProfile(userId: string) {
     ...ProgressionManager.buildResult(user.level, user.xp),
     equippedPlayerSkin,
     ownedSkins,
-    shopSkins: PLAYER_SKIN_CATALOG.map((skin) => ({
-      ...skin,
-      owned: ownedSkins.includes(skin.id),
-      equipped: equippedPlayerSkin === skin.id,
-    })),
+    skinOwnership,
+    shopSkins: skinOwnership,
   };
 }
 
