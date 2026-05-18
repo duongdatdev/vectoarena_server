@@ -5,55 +5,8 @@ import { authenticateToken } from '../middleware/auth';
 
 const router = Router();
 
-// In a production app, you should verify a cryptographic signature (SIWE) here
-// to prove the user actually owns the wallet address.
 router.post('/link-wallet', authenticateToken, async (req: Request, res: Response): Promise<any> => {
-    try {
-        const { walletAddress } = req.body;
-        const userId = (req as any).user?.userId;
-
-        if (!walletAddress || !userId) {
-            return res.status(400).json({ error: "Missing walletAddress or user authentication" });
-        }
-
-        const normalizedWalletAddress = walletAddress.toLowerCase();
-
-        const currentUser = await prisma.user.findUnique({
-            where: { id: userId },
-            select: { walletAddress: true }
-        });
-
-        if (!currentUser) {
-            return res.status(404).json({ error: "User not found" });
-        }
-
-        if (currentUser.walletAddress) {
-            if (currentUser.walletAddress.toLowerCase() === normalizedWalletAddress) {
-                return res.status(200).json({ success: true, walletAddress: normalizedWalletAddress });
-            }
-
-            return res.status(400).json({ error: "Account already linked to another wallet" });
-        }
-
-        // Check if wallet is already linked to another user
-        const existing = await prisma.user.findFirst({
-            where: { walletAddress: normalizedWalletAddress }
-        });
-
-        if (existing && existing.id !== userId) {
-            return res.status(400).json({ error: "Wallet already linked to another account" });
-        }
-
-        await prisma.user.update({
-            where: { id: userId },
-            data: { walletAddress: normalizedWalletAddress }
-        });
-
-        return res.status(200).json({ success: true, walletAddress: normalizedWalletAddress });
-    } catch (error) {
-        console.error("Link Wallet Error:", error);
-        return res.status(500).json({ error: "Internal Server Error" });
-    }
+    return res.status(410).json({ error: "Use GET /wallet/nonce and POST /wallet/verify to link a wallet." });
 });
 
 router.post('/deposit', authenticateToken, async (req: Request, res: Response): Promise<any> => {
