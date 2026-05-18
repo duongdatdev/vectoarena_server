@@ -8,6 +8,7 @@ import { ConfigService, WeaponConfig, WeaponConfigs } from "../managers/ConfigSe
 import { BotManager } from "../managers/BotManager";
 import prisma from "../database/prisma";
 import { DEFAULT_PLAYER_SKIN_ID } from "../managers/SkinCatalog";
+import { validateEquippedSkinOrFallback } from "../managers/SkinOwnershipService";
 import { ProgressionManager } from "../managers/ProgressionManager";
 
 type WeaponType = keyof WeaponConfigs;
@@ -449,9 +450,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
         select: { equippedPlayerSkin: true },
       });
 
-      return loadout?.equippedPlayerSkin || DEFAULT_PLAYER_SKIN_ID;
+      const validation = await validateEquippedSkinOrFallback(userId, loadout?.equippedPlayerSkin, {
+        updateLoadout: true,
+      });
+
+      return validation.skinId;
     } catch (error) {
-      console.error("[BattleRoom] Failed to load equipped player skin:", error);
+      console.error("[BattleRoom] Failed to validate equipped player skin:", error);
       return DEFAULT_PLAYER_SKIN_ID;
     }
   }

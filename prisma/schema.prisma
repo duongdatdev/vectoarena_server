@@ -31,6 +31,7 @@ model User {
   currencyEvents CurrencyTransaction[]
   participation  MatchParticipant[]
   skinInventory  SkinInventory[]
+  nftSkinCache   UserNftSkinCache[]
 
   @@index([createdAt])
 }
@@ -161,6 +162,45 @@ model SkinInventory {
   @@index([userId, skinType])
 }
 
+model SkinNftMapping {
+  id              String           @id @default(uuid()) @db.Uuid
+  skinId          String           @db.VarChar(64)
+  chainId         Int
+  contractAddress String           @db.VarChar(64)
+  tokenId         String           @db.VarChar(128)
+  standard        NftTokenStandard
+  priceVec        Int?
+  vecTokenAddress String?          @db.VarChar(64)
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  userCaches      UserNftSkinCache[]
+
+  @@unique([skinId, chainId, contractAddress, tokenId])
+  @@index([skinId, active])
+  @@index([chainId, contractAddress, tokenId])
+}
+
+model UserNftSkinCache {
+  id              String         @id @default(uuid()) @db.Uuid
+  userId          String         @db.Uuid
+  walletAddress   String         @db.VarChar(64)
+  skinId          String         @db.VarChar(64)
+  chainId         Int
+  contractAddress String         @db.VarChar(64)
+  tokenId         String         @db.VarChar(128)
+  balance         Int            @default(0)
+  lastSyncedAt    DateTime       @default(now())
+  txHash          String?        @db.VarChar(128)
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mapping         SkinNftMapping @relation(fields: [skinId, chainId, contractAddress, tokenId], references: [skinId, chainId, contractAddress, tokenId], onDelete: Cascade)
+
+  @@unique([userId, walletAddress, skinId, chainId, contractAddress, tokenId])
+  @@index([userId, skinId])
+  @@index([walletAddress, chainId, contractAddress])
+  @@index([lastSyncedAt])
+}
+
 enum MatchStatus {
   WAITING
   PLAYING
@@ -234,6 +274,11 @@ enum SkinSource {
   SHOP
   REWARD
   ADMIN
+}
+
+enum NftTokenStandard {
+  ERC721
+  ERC1155
 }
 
 enum DeathCause {

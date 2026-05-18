@@ -3,6 +3,7 @@ import prisma from "../database/prisma";
 import { AuthenticatedRequest, authenticateToken } from "../middleware/auth";
 import { DEFAULT_PLAYER_SKIN_ID, getPlayerSkinById, PLAYER_SKIN_CATALOG } from "../managers/SkinCatalog";
 import { ProgressionManager } from "../managers/ProgressionManager";
+import { getSkinOwnershipType, userOwnsSkin } from "../managers/SkinOwnershipService";
 
 const router = Router();
 const VALID_TRANSACTION_CURRENCY_TYPES = new Set(["VEC", "COIN"]);
@@ -67,6 +68,10 @@ async function buildPlayerProfile(userId: string) {
         where: { skinType: "PLAYER" },
         select: { skinCode: true },
       },
+      nftSkinCache: {
+        where: { balance: { gt: 0 } },
+        select: { skinId: true },
+      },
     },
   });
 
@@ -74,7 +79,11 @@ async function buildPlayerProfile(userId: string) {
     return null;
   }
 
-  const ownedSkins = user.skinInventory.map((skin: { skinCode: string }) => skin.skinCode);
+  const ownedSkinSet = new Set([
+    ...user.skinInventory.map((skin: { skinCode: string }) => skin.skinCode),
+    ...user.nftSkinCache.map((skin: { skinId: string }) => skin.skinId),
+  ]);
+  const ownedSkins = Array.from(ownedSkinSet);
   const equippedPlayerSkin = user.loadout?.equippedPlayerSkin || DEFAULT_PLAYER_SKIN_ID;
 
   return {
@@ -183,6 +192,14 @@ router.post("/buy-skin", authenticateToken, async (req: AuthenticatedRequest, re
   const skin = getPlayerSkinById(skinId);
   if (!skin) {
     return res.status(404).json({ error: "Skin not found." });
+  }
+
+  if (getSkinOwnershipType(skin) === "NFT") {
+    return res.status(403).json({
+      error: "NFT skins must be acquired through the NFT flow.",
+      code: "NFT_SKIN_REQUIRES_NFT_FLOW",
+      ownershipType: "NFT",
+    });
   }
 
   try {
@@ -310,16 +327,8 @@ router.post("/equip-skin", authenticateToken, async (req: AuthenticatedRequest, 
   try {
     await ensureDefaultPlayerInventory(req.user!.userId);
 
-    const ownedSkin = await (prisma as any).skinInventory.findUnique({
-      where: {
-        userId_skinCode: {
-          userId: req.user!.userId,
-          skinCode: skin.id,
-        },
-      },
-    });
-
-    if (!ownedSkin) {
+    const ownsSkin = await userOwnsSkin(req.user!.userId, skin.id);
+    if (!ownsSkin) {
       return res.status(403).json({ error: "Skin is not owned." });
     }
 
