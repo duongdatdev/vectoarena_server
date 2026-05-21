@@ -100,7 +100,7 @@ function normalizeAddress(address: string): string {
   return address.toLowerCase();
 }
 
-function getRpcUrl(chainId: number): string | null {
+export function getNftRpcUrl(chainId: number): string | null {
   const chainSpecificRpcUrl = process.env[`NFT_RPC_URL_${chainId}`];
   if (chainSpecificRpcUrl) {
     return chainSpecificRpcUrl;
@@ -230,7 +230,7 @@ export class EthersNftOwnershipService implements NftOwnershipService {
       return existingProvider;
     }
 
-    const rpcUrl = getRpcUrl(chainId);
+    const rpcUrl = getNftRpcUrl(chainId);
     if (!rpcUrl) {
       throw new NftOwnershipServiceError("NFT RPC URL is not configured for this chain.", "NFT_RPC_NOT_CONFIGURED", {
         chainId,

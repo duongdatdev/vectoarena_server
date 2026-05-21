@@ -32,6 +32,7 @@ model User {
   participation  MatchParticipant[]
   skinInventory  SkinInventory[]
   nftSkinCache   UserNftSkinCache[]
+  nftPurchaseHistory NftPurchaseHistory[]
   walletNonces   WalletNonce[]
 
   @@index([createdAt])
@@ -189,6 +190,7 @@ model SkinNftMapping {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   userCaches      UserNftSkinCache[]
+  purchaseHistory NftPurchaseHistory[]
 
   @@unique([skinId, chainId, contractAddress, tokenId])
   @@index([skinId, active])
@@ -213,6 +215,25 @@ model UserNftSkinCache {
   @@index([userId, skinId])
   @@index([walletAddress, chainId, contractAddress])
   @@index([lastSyncedAt])
+}
+
+model NftPurchaseHistory {
+  id              String            @id @default(uuid()) @db.Uuid
+  userId          String            @db.Uuid
+  walletAddress   String            @db.VarChar(64)
+  skinId          String            @db.VarChar(64)
+  chainId         Int
+  contractAddress String            @db.VarChar(64)
+  tokenId         String            @db.VarChar(128)
+  txHash          String            @unique @db.VarChar(128)
+  status          NftPurchaseStatus @default(SUCCESS)
+  createdAt       DateTime          @default(now())
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mapping         SkinNftMapping    @relation(fields: [skinId, chainId, contractAddress, tokenId], references: [skinId, chainId, contractAddress, tokenId], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([walletAddress, chainId, contractAddress])
+  @@index([skinId, status])
 }
 
 enum MatchStatus {
@@ -293,6 +314,12 @@ enum SkinSource {
 enum NftTokenStandard {
   ERC721
   ERC1155
+}
+
+enum NftPurchaseStatus {
+  PENDING
+  SUCCESS
+  FAILED
 }
 
 enum DeathCause {
