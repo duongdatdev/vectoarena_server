@@ -1,7 +1,7 @@
 import { Router, Response } from "express";
 import prisma from "../database/prisma";
 import { AuthenticatedRequest, authenticateToken } from "../middleware/auth";
-import { nftOwnershipService } from "../managers/NftOwnershipService";
+import { NftOwnershipResult, NftOwnershipServiceError, nftOwnershipService } from "../managers/NftOwnershipService";
 
 const router = Router();
 
@@ -15,6 +15,29 @@ type SyncedNftSkin = {
   owned: boolean;
   lastSyncedAt: Date;
 };
+
+type ActiveNftMapping = {
+  skinId: string;
+  chainId: number;
+  contractAddress: string;
+  tokenId: string;
+  standard: "ERC721" | "ERC1155";
+};
+
+type NftOwnershipSyncResult = {
+  mapping: ActiveNftMapping;
+  ownership: NftOwnershipResult;
+};
+
+function getNftSyncLimit(): number | undefined {
+  const rawLimit = process.env.NFT_SYNC_MAX_ITEMS;
+  if (!rawLimit) {
+    return undefined;
+  }
+
+  const limit = Number(rawLimit);
+  return Number.isInteger(limit) && limit > 0 ? limit : undefined;
+}
 
 router.post("/sync", authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<any> => {
   const userId = req.user?.userId;
@@ -42,9 +65,10 @@ router.post("/sync", authenticateToken, async (req: AuthenticatedRequest, res: R
       });
     }
 
-    const activeMappings = await (prisma as any).skinNftMapping.findMany({
+    const activeMappings: ActiveNftMapping[] = await (prisma as any).skinNftMapping.findMany({
       where: { active: true },
       orderBy: [{ skinId: "asc" }, { chainId: "asc" }, { tokenId: "asc" }],
+      take: getNftSyncLimit(),
       select: {
         skinId: true,
         chainId: true,
@@ -57,16 +81,25 @@ router.post("/sync", authenticateToken, async (req: AuthenticatedRequest, res: R
     const syncedAt = new Date();
     const syncedSkins: SyncedNftSkin[] = [];
 
-    await (prisma as any).$transaction(async (tx: any) => {
-      for (const mapping of activeMappings) {
-        const ownership = await nftOwnershipService.checkNftOwnership({
-          walletAddress: user.walletAddress,
-          chainId: mapping.chainId,
-          contractAddress: mapping.contractAddress,
-          tokenId: mapping.tokenId,
-          standard: mapping.standard,
-        });
+    const ownershipResults: NftOwnershipSyncResult[] = [];
+    for (const mapping of activeMappings) {
+      const ownership = await nftOwnershipService.checkNftOwnership({
+        walletAddress: user.walletAddress,
+        chainId: mapping.chainId,
+        contractAddress: mapping.contractAddress,
+        tokenId: mapping.tokenId,
+        standard: mapping.standard,
+      });
 
+      ownershipResults.push({
+        mapping,
+        ownership,
+      });
+    }
+
+    await (prisma as any).$transaction(async (tx: any) => {
+      for (const item of ownershipResults) {
+        const { mapping, ownership } = item;
         const cache = await tx.userNftSkinCache.upsert({
           where: {
             userId_walletAddress_skinId_chainId_contractAddress_tokenId: {
@@ -116,6 +149,20 @@ router.post("/sync", authenticateToken, async (req: AuthenticatedRequest, res: R
       nftSkins: syncedSkins,
     });
   } catch (error) {
+    if (error instanceof NftOwnershipServiceError) {
+      console.warn("[NftRoute] NFT ownership sync failed:", {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+      });
+
+      return res.status(502).json({
+        error: error.message,
+        code: error.code,
+        details: error.details,
+      });
+    }
+
     console.error("[NftRoute] Failed to sync NFT ownership:", error);
     return res.status(500).json({ error: "Unable to sync NFT ownership." });
   }
