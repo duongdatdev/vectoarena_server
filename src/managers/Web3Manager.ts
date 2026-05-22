@@ -21,34 +21,37 @@ export class Web3Manager {
     public async verifyDeposit(txHash: string, walletAddress: string, userId: string): Promise<number | null> {
         try {
             // Check if txHash was already processed
+            const normalizedTxHash = txHash.toLowerCase();
             const existingTx = await prisma.currencyTransaction.findFirst({
-                where: { txHash: txHash }
+                where: { txHash: normalizedTxHash }
             });
 
             if (existingTx) {
-                console.log(`Transaction ${txHash} already processed.`);
+                console.log(`Transaction ${normalizedTxHash} already processed.`);
                 return null;
             }
 
             // Fetch transaction receipt
-            const receipt = await this.provider.getTransactionReceipt(txHash);
+            const receipt = await this.provider.getTransactionReceipt(normalizedTxHash);
             if (!receipt || receipt.status !== 1) {
-                console.log(`Transaction ${txHash} failed or not found.`);
+                console.log(`Transaction ${normalizedTxHash} failed or not found.`);
                 return null;
             }
 
-            // Filter for Transfer events to the treasury wallet
+            // Filter for VEC Transfer events to the treasury wallet
             const contract = new ethers.Contract(this.tokenContractAddress, this.erc20Abi, this.provider);
-            const transferEvents = receipt.logs.map((log) => {
-                try {
-                    return contract.interface.parseLog({
-                        topics: [...log.topics],
-                        data: log.data
-                    });
-                } catch (e) {
-                    return null;
-                }
-            }).filter((parsedLog) => parsedLog?.name === 'Transfer');
+            const transferEvents = receipt.logs
+                .filter((log) => log.address.toLowerCase() === this.tokenContractAddress)
+                .map((log) => {
+                    try {
+                        return contract.interface.parseLog({
+                            topics: [...log.topics],
+                            data: log.data
+                        });
+                    } catch (e) {
+                        return null;
+                    }
+                }).filter((parsedLog) => parsedLog?.name === 'Transfer');
 
             let totalDeposited = 0n;
 
@@ -91,7 +94,7 @@ export class Web3Manager {
                                 balanceBefore: user.vecUnlockedBalance,
                                 balanceAfter: user.vecUnlockedBalance + finalAmount,
                                 status: 'SUCCESS',
-                                txHash: txHash,
+                                txHash: normalizedTxHash,
                                 chainId: 11155111,
                                 contractAddress: this.tokenContractAddress,
                                 note: "Web3 Deposit"
