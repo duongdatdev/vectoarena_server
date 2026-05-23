@@ -21,6 +21,7 @@ function buildWalletVerificationMessage(userId: string, nonce: string, issuedAt:
   ].join("\n");
 }
 
+// Endpoint to generate a new nonce for wallet verification
 router.get("/nonce", authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<any> => {
   const userId = req.user?.userId;
   if (!userId) {

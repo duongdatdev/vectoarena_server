@@ -12,6 +12,12 @@ import {
 const router = Router();
 const SKIN_PURCHASED_EVENT_ABI = ["event SkinPurchased(address buyer, uint256 tokenId, uint256 price)"];
 const skinPurchasedInterface = new ethers.Interface(SKIN_PURCHASED_EVENT_ABI);
+const ERC1155_MINT_EVENT_ABI = [
+  "event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)",
+];
+const erc1155MintInterface = new ethers.Interface(ERC1155_MINT_EVENT_ABI);
+const NFT_PURCHASE_FUNCTION_ABI = ["function buySkin(uint256 tokenId)"];
+const nftPurchaseInterface = new ethers.Interface(NFT_PURCHASE_FUNCTION_ABI);
 
 type SyncedNftSkin = {
   skinId: string;
@@ -46,6 +52,12 @@ type SkinPurchasedEvent = {
   buyer: string;
   tokenId: string;
   price: string;
+};
+
+type Erc1155MintEvent = {
+  to: string;
+  tokenId: string;
+  value: bigint;
 };
 
 class TxHashReplayError extends Error {
@@ -107,6 +119,44 @@ function findSkinPurchasedEvents(
         buyer: ethers.getAddress(String(parsed.args.buyer)),
         tokenId: parsed.args.tokenId.toString(),
         price: parsed.args.price.toString(),
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return events;
+}
+
+function findErc1155MintEvents(
+  logs: ReadonlyArray<{ address: string; topics: readonly string[]; data: string }>,
+  contractAddress: string
+): Erc1155MintEvent[] {
+  const events: Erc1155MintEvent[] = [];
+
+  for (const log of logs) {
+    if (!ethers.isAddress(log.address) || ethers.getAddress(log.address) !== contractAddress) {
+      continue;
+    }
+
+    try {
+      const parsed = erc1155MintInterface.parseLog({
+        topics: Array.from(log.topics),
+        data: log.data,
+      });
+
+      if (
+        !parsed ||
+        parsed.name !== "TransferSingle" ||
+        ethers.getAddress(String(parsed.args.from)) !== ethers.ZeroAddress
+      ) {
+        continue;
+      }
+
+      events.push({
+        to: ethers.getAddress(String(parsed.args.to)),
+        tokenId: parsed.args.id.toString(),
+        value: BigInt(parsed.args.value),
       });
     } catch {
       continue;
@@ -379,7 +429,15 @@ router.post("/purchase/confirm", authenticateToken, async (req: AuthenticatedReq
     }
 
     const transaction = await provider.getTransaction(txHash);
-    if (transaction && Number(transaction.chainId) !== mapping.chainId) {
+    if (!transaction) {
+      return res.status(202).json({
+        error: "Transaction details are not available yet.",
+        code: "TX_PENDING",
+        pending: true,
+      });
+    }
+
+    if (Number(transaction.chainId) !== mapping.chainId) {
       return res.status(400).json({
         error: "Transaction chainId does not match the NFT skin mapping.",
         code: "WRONG_CHAIN",
@@ -388,22 +446,43 @@ router.post("/purchase/confirm", authenticateToken, async (req: AuthenticatedReq
       });
     }
 
-    const purchaseEvents = findSkinPurchasedEvents(receipt.logs, expectedContractAddress);
-    if (purchaseEvents.length === 0) {
+    if (ethers.getAddress(transaction.from) !== userWalletAddress) {
       return res.status(400).json({
-        error: "SkinPurchased event was not found in the transaction receipt.",
-        code: "SKIN_PURCHASED_EVENT_NOT_FOUND",
+        error: "NFT purchase transaction sender does not match the authenticated user.",
+        code: "WRONG_BUYER",
       });
     }
 
+    let purchasedTokenId: string | null = null;
+    try {
+      const parsedTransaction = nftPurchaseInterface.parseTransaction({
+        data: transaction.data,
+        value: transaction.value,
+      });
+      purchasedTokenId = parsedTransaction?.name === "buySkin" ? parsedTransaction.args.tokenId.toString() : null;
+    } catch {
+      purchasedTokenId = null;
+    }
+
+    if (purchasedTokenId !== mapping.tokenId) {
+      return res.status(400).json({
+        error: "Transaction did not call buySkin for the requested NFT skin.",
+        code: "WRONG_PURCHASE_CALL",
+      });
+    }
+
+    const purchaseEvents = findSkinPurchasedEvents(receipt.logs, expectedContractAddress);
     const matchingEvent = purchaseEvents.find(
       (event) => event.buyer === userWalletAddress && event.tokenId === mapping.tokenId
     );
+    const matchingMint = findErc1155MintEvents(receipt.logs, expectedContractAddress).find(
+      (event) => event.to === userWalletAddress && event.tokenId === mapping.tokenId && event.value > 0n
+    );
 
-    if (!matchingEvent) {
+    if (!matchingEvent && !matchingMint) {
       return res.status(400).json({
-        error: "SkinPurchased event does not match the authenticated user and requested skin.",
-        code: "SKIN_PURCHASED_EVENT_MISMATCH",
+        error: "NFT mint event does not match the authenticated user and requested skin.",
+        code: "NFT_PURCHASE_EVENT_MISMATCH",
       });
     }
 
@@ -485,7 +564,7 @@ router.post("/purchase/confirm", authenticateToken, async (req: AuthenticatedReq
         chainId: mapping.chainId,
         contractAddress: mapping.contractAddress,
         tokenId: mapping.tokenId,
-        price: matchingEvent.price,
+        price: matchingEvent?.price ?? null,
       },
       nftSkin: {
         ...cache,
