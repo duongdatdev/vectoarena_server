@@ -11,6 +11,7 @@ import { DEFAULT_PLAYER_SKIN_ID } from "../managers/SkinCatalog";
 import { validateEquippedSkinOrFallback } from "../managers/SkinOwnershipService";
 import { ProgressionManager } from "../managers/ProgressionManager";
 import { AntiCheatTracker, AntiCheatParticipantResult } from "../managers/AntiCheatTracker";
+import { AntiCheatAssessmentService } from "../managers/AntiCheatAssessmentService";
 
 type WeaponType = keyof WeaponConfigs;
 type PrismaWeaponType =
@@ -95,6 +96,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private isAirdropMode = false;
   private gameOverQueued = false;
   private antiCheatTracker = new AntiCheatTracker();
+  private antiCheatAssessmentService = new AntiCheatAssessmentService();
 
   private toPrismaWeaponType(weapon: string): PrismaWeaponType | null {
     return PRISMA_WEAPON_TYPE_BY_RUNTIME_NAME[weapon] ?? null;
@@ -537,6 +539,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
             featureSnapshot,
           },
         });
+
+        await this.antiCheatAssessmentService.assessParticipant(result.participantId, featureSnapshot);
       } catch (error) {
         console.error("[AntiCheat] Failed to persist telemetry:", error);
       }
