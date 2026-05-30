@@ -157,3 +157,17 @@ dist
 .history
 .ionide
 /src/generated/prisma
+
+### Python / ML local artifacts ###
+ml/.venv/
+ml/**/__pycache__/
+ml/**/*.py[cod]
+.ipynb_checkpoints/
+ml/**/.ipynb_checkpoints/
+
+# Regenerated anti-cheat training artifacts.
+ml/data/*.csv
+ml/models/*.pkl
+ml/outputs/*.csv
+ml/outputs/figures/
+ml/outputs/reports/
