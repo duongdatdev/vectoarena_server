@@ -66,16 +66,31 @@ router.post("/login", async (req: Request, res: Response) => {
             return res.status(401).json({ error: "Invalid username or password." });
         }
 
+        if (user.bannedAt) {
+            return res.status(403).json({
+                error: "Your account has been banned.",
+                code: "ACCOUNT_BANNED",
+                reason: user.banReason || "No reason provided."
+            });
+        }
+
         const isValid = await bcrypt.compare(password, user.password);
         if (!isValid) {
             return res.status(401).json({ error: "Invalid username or password." });
         }
 
-        const token = jwt.sign({ userId: user.id, username: user.username }, jwtSecret, {
+        const token = jwt.sign({ userId: user.id, username: user.username, role: user.role }, jwtSecret, {
             expiresIn: "2h"
         });
 
-        return res.json({ token });
+        return res.json({
+            token,
+            user: {
+                id: user.id,
+                username: user.username,
+                role: user.role
+            }
+        });
     } catch (error) {
         console.error(error);
         return res.status(500).json({ error: "Unable to login." });

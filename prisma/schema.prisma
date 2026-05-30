@@ -10,6 +10,7 @@ model User {
   id             String                @id @default(uuid()) @db.Uuid
   username       String                @unique @db.VarChar(32)
   password       String                @db.VarChar(255)
+  role           UserRole              @default(PLAYER)
   displayName    String?               @db.VarChar(64)
   vecUnlockedBalance Int                @default(0)
   vecLockedBalance   Int                @default(0)
@@ -23,6 +24,9 @@ model User {
   totalDeaths    Int                   @default(0)
   totalDamage    Int                   @default(0)
   bestPlacement  Int?
+  bannedAt       DateTime?
+  banReason      String?               @db.VarChar(255)
+  bannedByAdminId String?              @db.Uuid
   lastLoginAt    DateTime?
   createdAt      DateTime              @default(now())
   updatedAt      DateTime              @updatedAt
@@ -389,4 +393,9 @@ enum SessionPlatform {
   IOS
   WEB
   UNKNOWN
+}
+
+enum UserRole {
+  PLAYER
+  ADMIN
 }

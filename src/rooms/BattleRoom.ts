@@ -1270,10 +1270,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
     });
   }
 
-  onAuth(client: Client, options: any) {
+  async onAuth(client: Client, options: any) {
     if (options.accessToken) {
       const decoded = AuthManager.verifyToken(options.accessToken);
       if (decoded) {
+        const user = await (prisma as any).user.findUnique({
+          where: { id: decoded.userId },
+          select: { bannedAt: true, banReason: true },
+        });
+        if (user?.bannedAt) {
+          throw new Error(`ACCOUNT_BANNED:${user.banReason || "No reason provided."}`);
+        }
+
         (client as any).username = decoded.username;
         (client as any).userId = decoded.userId;
         return true;
