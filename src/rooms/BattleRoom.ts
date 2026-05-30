@@ -963,15 +963,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
         const dz = z - player.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
         const allowedDistance = this.getAllowedMoveDistance(client.sessionId, Date.now());
-        const observedSpeed = this.getObservedMoveSpeed(distance, allowedDistance);
+        const rawObservedSpeed = this.getObservedMoveSpeed(distance, allowedDistance);
         const allowedSpeedWithGrace = BattleRoom.MAX_MOVE_SPEED * BattleRoom.MOVE_SPEED_GRACE_MULTIPLIER;
         const shouldClampMove = distance > allowedDistance + BattleRoom.MOVE_CLAMP_DISTANCE_MARGIN &&
-          observedSpeed > allowedSpeedWithGrace * BattleRoom.MOVE_CLAMP_SPEED_MULTIPLIER;
+          rawObservedSpeed > allowedSpeedWithGrace * BattleRoom.MOVE_CLAMP_SPEED_MULTIPLIER;
         const severeMoveAnomaly = shouldClampMove && (
           distance > allowedDistance + BattleRoom.MOVE_ANOMALY_DISTANCE_MARGIN ||
-          observedSpeed > allowedSpeedWithGrace * BattleRoom.MOVE_ANOMALY_SPEED_MULTIPLIER
+          rawObservedSpeed > allowedSpeedWithGrace * BattleRoom.MOVE_ANOMALY_SPEED_MULTIPLIER
         );
-        this.antiCheatTracker.trackMove(client.sessionId, distance, allowedDistance, observedSpeed, severeMoveAnomaly);
+        const observedSpeedForTelemetry = distance > allowedDistance + BattleRoom.MOVE_CLAMP_DISTANCE_MARGIN
+          ? rawObservedSpeed
+          : Math.min(rawObservedSpeed, allowedSpeedWithGrace);
+        this.antiCheatTracker.trackMove(client.sessionId, distance, allowedDistance, observedSpeedForTelemetry, severeMoveAnomaly);
 
         if (shouldClampMove) {
           if (distance > 0 && allowedDistance > 0) {

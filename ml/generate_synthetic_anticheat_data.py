@@ -13,6 +13,7 @@ MAX_HIT_DISTANCE = 60
 MAX_ITEM_PICKUP_DISTANCE = 3
 
 WEAPONS = {
+    "Sword": {"damage": 0, "fireRatePerSecond": 0, "maxAmmo": 0},
     "Rifle": {"damage": 10, "fireRatePerSecond": 10, "maxAmmo": 30},
     "Shotgun": {"damage": 25, "fireRatePerSecond": 1.5, "maxAmmo": 8},
     "Pistol": {"damage": 12, "fireRatePerSecond": 5, "maxAmmo": 12},
@@ -59,23 +60,34 @@ def build_row(index):
     mode = random.choices(MODES, weights=[0.82, 0.18], k=1)[0]
     weapon = random.choices(
         list(WEAPONS.keys()),
-        weights=[16, 12, 13, 10, 6, 5, 4, 8, 5, 6, 9],
+        weights=[18, 14, 18, 11, 8, 4, 4, 3, 6, 3, 4, 7],
         k=1,
     )[0]
     weapon_config = WEAPONS[weapon]
+    melee_only = weapon == "Sword"
 
-    duration_seconds = rand_int(95, 420)
+    duration_bucket = random.random()
+    if duration_bucket < 0.46:
+        duration_seconds = rand_int(18, 90)
+    elif duration_bucket < 0.88:
+        duration_seconds = rand_int(91, 220)
+    else:
+        duration_seconds = rand_int(221, 360)
     survived_ratio = {
-        "normal": random.betavariate(2.0, 1.6),
-        "high_skill": random.betavariate(2.7, 1.1),
-        "suspicious_soft": random.betavariate(3.0, 0.9),
-        "suspicious_hard": random.betavariate(3.5, 0.75),
+        "normal": random.betavariate(1.35, 1.75),
+        "high_skill": random.betavariate(2.0, 1.15),
+        "suspicious_soft": random.betavariate(2.4, 1.0),
+        "suspicious_hard": random.betavariate(2.8, 0.85),
     }[profile]
-    survived_seconds = int(clamp(duration_seconds * survived_ratio, 12, duration_seconds))
+    survived_seconds = int(clamp(duration_seconds * survived_ratio, 8, duration_seconds))
 
     if profile == "normal":
-        kills = clamp(poisson_like(1.1), 0, 4)
-        hit_rate = clamp(random.gauss(0.28, 0.11), 0.04, 0.62)
+        kills = clamp(poisson_like(0.8), 0, 4)
+        if survived_seconds <= 75 and random.random() < 0.22:
+            kills = max(kills, rand_int(1, 3))
+        hit_rate = 0 if melee_only else clamp(random.gauss(0.28, 0.12), 0.0, 0.66)
+        if kills >= 2 and survived_seconds <= 75 and not melee_only:
+            hit_rate = clamp(random.gauss(0.52, 0.12), 0.28, 0.72)
         movement_per_minute = clamp(random.gauss(115, 38), 22, 230)
         move_clamp_count = random.choices([0, 1, 2], weights=[91, 8, 1], k=1)[0]
         invalid_hit_count = random.choices([0, 1, 2], weights=[93, 6, 1], k=1)[0]
@@ -83,7 +95,7 @@ def build_row(index):
         pickup_reject_count = random.choices([0, 1], weights=[95, 5], k=1)[0]
     elif profile == "high_skill":
         kills = rand_int(2, 6)
-        hit_rate = clamp(random.gauss(0.47, 0.09), 0.22, 0.74)
+        hit_rate = 0 if melee_only else clamp(random.gauss(0.47, 0.1), 0.18, 0.78)
         movement_per_minute = clamp(random.gauss(135, 42), 40, 260)
         move_clamp_count = random.choices([0, 1, 2, 3], weights=[83, 12, 4, 1], k=1)[0]
         invalid_hit_count = random.choices([0, 1, 2, 3], weights=[82, 12, 5, 1], k=1)[0]
@@ -91,38 +103,52 @@ def build_row(index):
         pickup_reject_count = random.choices([0, 1, 2], weights=[91, 8, 1], k=1)[0]
     elif profile == "suspicious_soft":
         kills = rand_int(4, 10)
-        hit_rate = clamp(random.gauss(0.68, 0.1), 0.43, 0.92)
+        hit_rate = 0 if melee_only else clamp(random.gauss(0.68, 0.1), 0.43, 0.92)
         movement_per_minute = clamp(random.gauss(80, 50), 8, 260)
         move_clamp_count = rand_int(2, 9)
-        invalid_hit_count = rand_int(2, 10)
+        invalid_hit_count = 0 if melee_only else rand_int(2, 10)
         fire_rate_reject_count = rand_int(1, 8)
         pickup_reject_count = rand_int(0, 4)
     else:
         kills = rand_int(8, 18)
-        hit_rate = clamp(random.gauss(0.86, 0.07), 0.62, 0.99)
+        hit_rate = 0 if melee_only else clamp(random.gauss(0.86, 0.07), 0.62, 0.99)
         movement_per_minute = clamp(random.choice([random.gauss(35, 24), random.gauss(260, 75)]), 2, 480)
         move_clamp_count = rand_int(8, 28)
-        invalid_hit_count = rand_int(8, 32)
+        invalid_hit_count = 0 if melee_only else rand_int(8, 32)
         fire_rate_reject_count = rand_int(5, 24)
         pickup_reject_count = rand_int(1, 9)
 
-    shots_accepted = max(kills + 1, int(kills / max(hit_rate, 0.05)) + rand_int(1, 18))
-    hits_accepted = int(round(shots_accepted * hit_rate))
-    if profile in ("suspicious_soft", "suspicious_hard"):
-        hits_accepted = max(hits_accepted, kills + rand_int(2, 10))
-    hits_accepted = min(hits_accepted, shots_accepted)
+    if melee_only:
+        shots_accepted = 0
+        hits_accepted = 0
+    else:
+        if kills == 0 and random.random() < 0.28:
+            shots_accepted = rand_int(0, 4)
+        else:
+            shots_accepted = max(kills + 1, int(kills / max(hit_rate, 0.05)) + rand_int(1, 12))
+        hits_accepted = int(round(shots_accepted * hit_rate))
+        if profile in ("suspicious_soft", "suspicious_hard"):
+            hits_accepted = max(hits_accepted, kills + rand_int(2, 10))
+        hits_accepted = min(hits_accepted, shots_accepted)
 
-    damage_dealt = int(hits_accepted * weapon_config["damage"] * random.uniform(0.88, 1.16))
-    damage_dealt = max(damage_dealt, kills * 35)
+    if melee_only:
+        damage_dealt = int(max(kills * 35, rand_int(0, max(kills, 1)) * 35))
+    else:
+        damage_dealt = int(hits_accepted * weapon_config["damage"] * random.uniform(0.88, 1.16))
+        damage_dealt = max(damage_dealt, kills * 35)
     damage_taken = int(clamp(random.gauss(75, 44), 0, 230))
+    if survived_seconds < 35 and kills == 0:
+        damage_taken = int(clamp(random.gauss(35, 16), 0, 100))
     if profile == "suspicious_hard":
         damage_taken = int(clamp(random.gauss(34, 30), 0, 140))
 
     total_distance = int(movement_per_minute * survived_seconds / 60)
+    allowed_move_speed_with_grace = MAX_MOVE_SPEED * MOVE_SPEED_GRACE_MULTIPLIER
+    normal_speed_cap = allowed_move_speed_with_grace if move_clamp_count == 0 else 6
     max_move_speed_observed = clamp(
-        random.gauss(3.0, 0.7) + move_clamp_count * random.uniform(0.08, 0.28),
+        random.gauss(3.65, 0.48) + move_clamp_count * random.uniform(0.05, 0.22),
         0,
-        12 if profile.startswith("suspicious") else 6,
+        12 if profile.startswith("suspicious") else normal_speed_cap,
     )
     if profile == "suspicious_hard" and random.random() < 0.62:
         max_move_speed_observed = random.uniform(5.2, 12.0)
@@ -133,8 +159,10 @@ def build_row(index):
     deaths = 0 if placement == 1 else 1
     is_winner = 1 if placement == 1 else 0
 
-    pickup_count = rand_int(1, 10)
-    melee_attack_count = rand_int(0, 8)
+    pickup_count = random.choices([0, 1, 2, 3, 4, 5, 6], weights=[18, 26, 22, 15, 10, 6, 3], k=1)[0]
+    melee_attack_count = random.choices([0, 1, 2, 3, 4, 5, 6], weights=[24, 24, 18, 13, 9, 7, 5], k=1)[0]
+    if melee_only:
+        melee_attack_count = max(melee_attack_count, rand_int(1, 7) if kills > 0 else rand_int(0, 3))
     melee_invalid_count = random.choices([0, 1, 2, 3], weights=[88, 8, 3, 1], k=1)[0]
     if profile.startswith("suspicious"):
         melee_invalid_count += rand_int(0, 5)
@@ -147,7 +175,7 @@ def build_row(index):
 
     match_minutes = max(duration_seconds / 60, 1e-6)
     survived_minutes = max(survived_seconds / 60, 1e-6)
-    actions_rejected = move_clamp_count + invalid_hit_count + fire_rate_reject_count + pickup_reject_count + melee_invalid_count
+    actions_rejected = invalid_hit_count + fire_rate_reject_count + pickup_reject_count + melee_invalid_count
     total_actions = max(1, shots_accepted + pickup_count + melee_attack_count + actions_rejected)
     # Mirror AntiCheatTracker: moveClampRate = moveClampCount / max(moveEventCount, 1).
     move_event_count = max(move_clamp_count, int(survived_seconds * random.uniform(3.0, 8.0)))
@@ -160,7 +188,8 @@ def build_row(index):
     score = 0.0
     score += min(0.22, max(0, hit_rate - 0.55) * 0.5)
     score += min(0.18, max(0, damage_per_minute - 120) / 600)
-    score += min(0.16, max(0, kills_per_minute - 0.9) / 4)
+    kills_per_minute_threshold = 1.8 if survived_seconds < 90 and kills <= 3 else 0.9
+    score += min(0.16, max(0, kills_per_minute - kills_per_minute_threshold) / 4)
     score += min(0.16, invalid_action_rate * 0.9)
     score += min(0.14, move_clamp_count / 35)
     score += min(0.14, invalid_hit_count / 38)
