@@ -117,6 +117,8 @@ select {
 .table-actions button,
 .session-pill button,
 .review-actions button,
+.icon-text-button,
+.danger-outline-button,
 .danger-button {
   border: 1px solid var(--border);
   background: #fff;
@@ -136,6 +138,17 @@ select {
   background: #b91c1c;
   border-color: #b91c1c;
   color: #fff;
+}
+
+.danger-outline-button {
+  border-color: #fecaca;
+  color: #991b1b;
+  background: #fff;
+}
+
+.danger-outline-button:hover {
+  background: #fef2f2;
+  border-color: #fca5a5;
 }
 
 .primary-button:hover,
@@ -499,9 +512,93 @@ tbody tr:hover,
   padding: 6px 10px;
 }
 
+.icon-text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  color: var(--primary);
+}
+
 .ban-inline input {
   width: min(240px, 100%);
   min-height: 34px;
+}
+
+.detail-row > td {
+  padding: 0;
+  background: #f8fafc;
+}
+
+.anticheat-detail {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.detail-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.detail-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.detail-section h3 {
+  margin: 0;
+  color: #1e293b;
+  font-size: 0.95rem;
+}
+
+.detail-kv {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 14px;
+  align-items: baseline;
+}
+
+.detail-kv span,
+.telemetry-cell span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.detail-kv strong {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.telemetry-cell {
+  min-height: 68px;
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-soft);
+}
+
+.nested-table th,
+.nested-table td {
+  padding: 8px 10px;
 }
 
 .empty-state {
@@ -559,14 +656,26 @@ tbody tr:hover,
 
   .metrics-grid,
   .balance-grid,
+  .detail-summary-grid,
   .sidebar nav {
     grid-template-columns: 1fr;
+  }
+
+  .telemetry-grid {
+    grid-template-columns: repeat(2, minmax(150px, 1fr));
   }
 
   table {
     display: block;
     overflow-x: auto;
     white-space: nowrap;
+  }
+}
+
+@media (max-width: 560px) {
+  .detail-kv,
+  .telemetry-grid {
+    grid-template-columns: 1fr;
   }
 }
 

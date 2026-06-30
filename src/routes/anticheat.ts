@@ -210,6 +210,121 @@ router.get("/telemetry", async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+router.get("/telemetry/:id/details", async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const telemetry = await (prisma as any).antiCheatTelemetry.findUnique({
+      where: { id: req.params.id },
+      include: {
+        participant: {
+          include: {
+            match: {
+              include: {
+                participants: {
+                  select: {
+                    id: true,
+                    userId: true,
+                    usernameSnapshot: true,
+                    sessionId: true,
+                    placement: true,
+                    kills: true,
+                    deaths: true,
+                    damageDealt: true,
+                    damageTaken: true,
+                    vecCollected: true,
+                    vecDropped: true,
+                    vecCarried: true,
+                    rewardVec: true,
+                    rewardXp: true,
+                    survivedSeconds: true,
+                    isWinner: true,
+                  },
+                  orderBy: [{ placement: "asc" }, { kills: "desc" }],
+                },
+                killEvents: {
+                  orderBy: { happenedAt: "asc" },
+                  select: {
+                    id: true,
+                    killerParticipantId: true,
+                    victimParticipantId: true,
+                    damage: true,
+                    weapon: true,
+                    deathCause: true,
+                    x: true,
+                    y: true,
+                    z: true,
+                    happenedAt: true,
+                    killer: {
+                      select: {
+                        id: true,
+                        usernameSnapshot: true,
+                      },
+                    },
+                    victim: {
+                      select: {
+                        id: true,
+                        usernameSnapshot: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            user: {
+              select: {
+                id: true,
+                username: true,
+                bannedAt: true,
+                banReason: true,
+              },
+            },
+            antiCheatAssessments: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: {
+                id: true,
+                score: true,
+                label: true,
+                modelVersion: true,
+                reasonCodes: true,
+                reviewedAt: true,
+                reviewStatus: true,
+                reviewerNote: true,
+                featureSnapshot: true,
+                createdAt: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!telemetry) {
+      return res.status(404).json({ error: "Anti-cheat telemetry not found." });
+    }
+
+    const participantId = telemetry.participant.id;
+    const allKillEvents = telemetry.participant.match.killEvents ?? [];
+    const playerKillEvents = allKillEvents.filter((event: any) => {
+      return event.killerParticipantId === participantId || event.victimParticipantId === participantId;
+    });
+    const { antiCheatAssessments, ...participant } = telemetry.participant;
+    const assessment = antiCheatAssessments[0] ?? null;
+
+    return res.json({
+      telemetry,
+      assessment,
+      participant,
+      match: participant.match,
+      matchParticipants: participant.match.participants,
+      playerKillEvents,
+      matchKillEvents: allKillEvents,
+    });
+  } catch (error) {
+    console.error("[AntiCheatRoute] Failed to load telemetry detail:", error);
+    return res.status(500).json({ error: "Unable to load anti-cheat telemetry detail." });
+  }
+});
+
 router.patch("/assessments/:id/review", async (req: AuthenticatedRequest, res: Response) => {
   const { reviewStatus, reviewerNote, banUser, banReason } = req.body ?? {};
 

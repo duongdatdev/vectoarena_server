@@ -254,6 +254,34 @@ router.patch("/users/:id/role", async (req: AuthenticatedRequest, res: Response)
   }
 });
 
+router.patch("/users/:id/unban", async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const user = await (prisma as any).user.update({
+      where: { id: req.params.id },
+      data: {
+        bannedAt: null,
+        banReason: null,
+        bannedByAdminId: null,
+      },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        bannedAt: true,
+        banReason: true,
+      },
+    });
+
+    return res.json({ user });
+  } catch (error: any) {
+    if (error?.code === "P2025") {
+      return res.status(404).json({ error: "User not found." });
+    }
+    console.error("[AdminRoute] Failed to unban user:", error);
+    return res.status(500).json({ error: "Unable to unban user." });
+  }
+});
+
 router.post("/users/:id/currency-adjustments", async (req: AuthenticatedRequest, res: Response) => {
   const currencyType = typeof req.body?.currencyType === "string" ? req.body.currencyType : "";
   const vecBucket = typeof req.body?.vecBucket === "string" ? req.body.vecBucket : undefined;

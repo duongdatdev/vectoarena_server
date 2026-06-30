@@ -5,6 +5,7 @@ import {
   BadgeCheck,
   Coins,
   Database,
+  Eye,
   Gauge,
   LogOut,
   Search,
@@ -69,6 +70,13 @@ function formatDate(value?: string | null) {
 
 function formatNumber(value: number | undefined | null) {
   return new Intl.NumberFormat("en").format(value ?? 0);
+}
+
+function formatDecimal(value: number | undefined | null, digits = 2) {
+  return new Intl.NumberFormat("en", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value ?? 0);
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -325,6 +333,22 @@ function UserDetail({ session, userId, onChanged }: { session: Session; userId: 
     }
   }
 
+  async function unbanUser() {
+    if (!userId) return;
+    setMessage(null);
+    try {
+      await parseResponse(await fetch(`/admin/users/${userId}/unban`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.token}` },
+      }));
+      setMessage("Player unbanned");
+      state.reload();
+      onChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to unban player");
+    }
+  }
+
   if (!userId) {
     return (
       <aside className="panel detail-panel">
@@ -354,6 +378,7 @@ function UserDetail({ session, userId, onChanged }: { session: Session; userId: 
             <div className="button-row">
               <button onClick={() => patchRole("ADMIN")}>Make admin</button>
               <button onClick={() => patchRole("PLAYER")}>Make player</button>
+              {data.user.bannedAt ? <button className="danger-outline-button" onClick={unbanUser}>Unban player</button> : null}
             </div>
             <div className="balance-grid">
               <MetricCard label="Coin" value={formatNumber(data.user.coinBalance)} icon={Coins} />
@@ -458,6 +483,8 @@ function TransactionsView({ session }: { session: Session }) {
 function AntiCheatView({ session }: { session: Session }) {
   const state = useApi<any>(session, "/admin/anticheat/assessments?limit=100");
   const [banReasons, setBanReasons] = useState<Record<string, string>>({});
+  const [pendingBanId, setPendingBanId] = useState<string | null>(null);
+  const [expandedTelemetryId, setExpandedTelemetryId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   async function review(id: string, reviewStatus: string) {
@@ -467,7 +494,21 @@ function AntiCheatView({ session }: { session: Session }) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.token}` },
       body: JSON.stringify({ reviewStatus }),
     }));
+    setPendingBanId(null);
     state.reload();
+  }
+
+  async function unbanPlayer(userId: string) {
+    try {
+      setActionError(null);
+      await parseResponse(await fetch(`/admin/users/${userId}/unban`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.token}` },
+      }));
+      state.reload();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to unban player");
+    }
   }
 
   async function banFromAssessment(id: string) {
@@ -511,42 +552,73 @@ function AntiCheatView({ session }: { session: Session }) {
                 const isConfirmed = item.reviewStatus === "Confirmed";
                 const isBanned = Boolean(item.participant.user?.bannedAt);
                 const canBan = isConfirmed && item.participant.userId && !isBanned;
+                const isExpanded = expandedTelemetryId === item.telemetryId;
+                const isEnteringReason = pendingBanId === item.id;
 
                 return (
-                  <tr key={item.id}>
-                    <td>
-                      <strong>{item.participant.usernameSnapshot}</strong>
-                      {isBanned ? <span className="subtle-line">Banned</span> : null}
-                    </td>
-                    <td><Badge value={item.label} /></td>
-                    <td className="mono">{item.score.toFixed(3)}</td>
-                    <td className="mono">{item.participant.match.roomCode}</td>
-                    <td>{item.participant.kills} K / {item.participant.deaths} D</td>
-                    <td>{hasAssessment ? (isReviewed ? <Badge value={item.reviewStatus} /> : <Badge value="Pending" />) : <Badge value="No flags" />}</td>
-                    <td>
-                      {!hasAssessment ? (
-                        <span className="decision-note">Telemetry recorded. No review required.</span>
-                      ) : !isReviewed ? (
-                        <div className="review-actions">
-                          <button className="primary-button" onClick={() => review(item.id, "Confirmed")}>Confirm violation</button>
-                          <button onClick={() => review(item.id, "FalsePositive")}>False positive</button>
-                        </div>
-                      ) : isBanned ? (
-                        <span className="decision-note">{item.participant.user?.banReason || "Player is banned."}</span>
-                      ) : canBan ? (
-                        <div className="ban-inline">
-                          <input
-                            value={banReasons[item.id] ?? ""}
-                            onChange={(event) => setBanReasons((current) => ({ ...current, [item.id]: event.target.value }))}
-                            placeholder="Reason shown to player"
-                          />
-                          <button className="danger-button" onClick={() => banFromAssessment(item.id)}>Ban player</button>
-                        </div>
-                      ) : (
-                        <span className="decision-note">No further action</span>
-                      )}
-                    </td>
-                  </tr>
+                  <React.Fragment key={item.telemetryId}>
+                    <tr>
+                      <td>
+                        <strong>{item.participant.usernameSnapshot}</strong>
+                        {isBanned ? <span className="subtle-line">Banned</span> : null}
+                      </td>
+                      <td><Badge value={item.label} /></td>
+                      <td className="mono">{item.score.toFixed(3)}</td>
+                      <td className="mono">
+                        {item.participant.match.roomCode}
+                        <button
+                          className="icon-text-button"
+                          onClick={() => setExpandedTelemetryId(isExpanded ? null : item.telemetryId)}
+                        >
+                          <Eye size={15} /> {isExpanded ? "Hide detail" : "View detail"}
+                        </button>
+                      </td>
+                      <td>
+                        {item.participant.kills} K / {item.participant.deaths} D
+                        <span className="subtle-line">{formatNumber(item.participant.damageDealt)} dmg</span>
+                      </td>
+                      <td>{hasAssessment ? (isReviewed ? <Badge value={item.reviewStatus} /> : <Badge value="Pending" />) : <Badge value="No flags" />}</td>
+                      <td>
+                        {!hasAssessment ? (
+                          <span className="decision-note">Telemetry recorded. No review required.</span>
+                        ) : !isReviewed ? (
+                          <div className="review-actions">
+                            <button className="primary-button" onClick={() => review(item.id, "Confirmed")}>Confirm violation</button>
+                            <button onClick={() => review(item.id, "FalsePositive")}>False positive</button>
+                          </div>
+                        ) : isBanned ? (
+                          <div className="review-actions">
+                            <span className="decision-note">{item.participant.user?.banReason || "Player is banned."}</span>
+                            {item.participant.userId ? (
+                              <button className="danger-outline-button" onClick={() => unbanPlayer(item.participant.userId)}>Unban player</button>
+                            ) : null}
+                          </div>
+                        ) : canBan && isEnteringReason ? (
+                          <div className="ban-inline">
+                            <input
+                              autoFocus
+                              value={banReasons[item.id] ?? ""}
+                              onChange={(event) => setBanReasons((current) => ({ ...current, [item.id]: event.target.value }))}
+                              placeholder="Reason shown to player"
+                            />
+                            <button className="danger-button" onClick={() => banFromAssessment(item.id)}>Confirm ban</button>
+                            <button onClick={() => setPendingBanId(null)}>Cancel</button>
+                          </div>
+                        ) : canBan ? (
+                          <button className="danger-button" onClick={() => setPendingBanId(item.id)}>Ban player</button>
+                        ) : (
+                          <span className="decision-note">No further action</span>
+                        )}
+                      </td>
+                    </tr>
+                    {isExpanded ? (
+                      <tr className="detail-row">
+                        <td colSpan={7}>
+                          <AntiCheatDetail session={session} telemetryId={item.telemetryId} />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -554,6 +626,136 @@ function AntiCheatView({ session }: { session: Session }) {
         )}
       </StatusBlock>
     </section>
+  );
+}
+
+function AntiCheatDetail({ session, telemetryId }: { session: Session; telemetryId: string }) {
+  const state = useApi<any>(session, `/admin/anticheat/telemetry/${telemetryId}/details`, [telemetryId]);
+  const metricLabels: Array<[string, string, "int" | "float"]> = [
+    ["Shots accepted", "shotsAccepted", "int"],
+    ["Hits accepted", "hitsAccepted", "int"],
+    ["Hit rate", "hitRate", "float"],
+    ["Invalid hit", "invalidHitCount", "int"],
+    ["Fire-rate rejects", "fireRateRejectCount", "int"],
+    ["Distance moved", "totalDistance", "float"],
+    ["Move / min", "movementPerMinute", "float"],
+    ["Max speed", "maxMoveSpeedObserved", "float"],
+    ["Move clamps", "moveClampCount", "int"],
+    ["Move clamp rate", "moveClampRate", "float"],
+    ["Pickups", "pickupCount", "int"],
+    ["Pickup rejects", "pickupRejectCount", "int"],
+    ["Melee attacks", "meleeAttackCount", "int"],
+    ["Invalid melee", "meleeInvalidCount", "int"],
+    ["Rejected actions", "actionsRejected", "int"],
+    ["Invalid action rate", "invalidActionRate", "float"],
+    ["Kills / min", "killsPerMinute", "float"],
+    ["Damage / min", "damagePerMinute", "float"],
+    ["Damage / kill", "damagePerKill", "float"],
+    ["Allowed hit distance", "allowedMaxHitDistance", "float"],
+    ["Allowed pickup distance", "allowedMaxItemPickupDistance", "float"],
+    ["Allowed speed + grace", "allowedMoveSpeedWithGrace", "float"],
+  ];
+
+  return (
+    <StatusBlock state={state}>
+      {(data) => {
+        const telemetry = data.telemetry;
+        const assessment = data.assessment;
+        const participant = data.participant;
+        const playerEvents = data.playerKillEvents ?? [];
+        const reasonCodes = Array.isArray(assessment?.reasonCodes) ? assessment.reasonCodes : [];
+
+        return (
+          <div className="anticheat-detail">
+            <div className="detail-summary-grid">
+              <MetricCard label="Risk score" value={formatDecimal(assessment?.score ?? 0, 3)} icon={Shield} tone={assessment?.label === "Suspicious" ? "red" : "amber"} />
+              <MetricCard label="Placement" value={participant.placement ?? "-"} icon={Swords} />
+              <MetricCard label="Reward XP" value={formatNumber(participant.rewardXp)} icon={BadgeCheck} tone="green" />
+            </div>
+
+            <div className="detail-section">
+              <h3>Review signal</h3>
+              <div className="detail-kv">
+                <span>Label</span><strong>{assessment?.label ?? "Normal"}</strong>
+                <span>Score</span><strong className="mono">{formatDecimal(assessment?.score ?? 0, 3)}</strong>
+                <span>Model</span><strong>{assessment?.modelVersion ?? "telemetry-only"}</strong>
+                <span>Reason codes</span><strong>{reasonCodes.length ? reasonCodes.join(", ") : "None"}</strong>
+              </div>
+            </div>
+
+            <div className="detail-section">
+              <h3>Player match result</h3>
+              <div className="detail-kv">
+                <span>Player</span><strong>{participant.usernameSnapshot}</strong>
+                <span>Scoreboard</span><strong>{participant.kills} K / {participant.deaths} D / {formatNumber(participant.damageDealt)} damage</strong>
+                <span>Damage taken</span><strong>{formatNumber(participant.damageTaken)}</strong>
+                <span>Survived</span><strong>{formatNumber(participant.survivedSeconds)}s</strong>
+                <span>VEC collected</span><strong>{formatNumber(participant.vecCollected)}</strong>
+                <span>Reward VEC</span><strong>{formatNumber(participant.rewardVec)}</strong>
+              </div>
+            </div>
+
+            <div className="detail-section">
+              <h3>Telemetry actions</h3>
+              <div className="telemetry-grid">
+                {metricLabels.map(([label, key, type]) => (
+                  <div key={key} className="telemetry-cell">
+                    <span>{label}</span>
+                    <strong className="mono">{type === "int" ? formatNumber(telemetry[key]) : formatDecimal(telemetry[key])}</strong>
+                  </div>
+                ))}
+                <div className="telemetry-cell">
+                  <span>Primary weapon</span>
+                  <strong>{telemetry.primaryWeapon ?? "-"}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="detail-section">
+              <h3>Combat timeline for this player</h3>
+              {playerEvents.length ? (
+                <table className="nested-table">
+                  <thead><tr><th>Time</th><th>Action</th><th>Damage</th><th>Weapon</th><th>Position</th></tr></thead>
+                  <tbody>
+                    {playerEvents.map((event: any) => {
+                      const didKill = event.killerParticipantId === participant.id;
+                      const otherName = didKill ? event.victim?.usernameSnapshot : event.killer?.usernameSnapshot;
+                      return (
+                        <tr key={event.id}>
+                          <td>{formatDate(event.happenedAt)}</td>
+                          <td>{didKill ? "Killed" : "Died to"} {otherName ?? event.deathCause}</td>
+                          <td>{formatNumber(event.damage)}</td>
+                          <td>{event.weapon ?? event.deathCause}</td>
+                          <td className="mono">{[event.x, event.y, event.z].map((value) => value == null ? "-" : formatDecimal(value, 1)).join(", ")}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : <div className="muted">No kill/death events recorded for this player.</div>}
+            </div>
+
+            <div className="detail-section">
+              <h3>All players in match</h3>
+              <table className="nested-table">
+                <thead><tr><th>Player</th><th>Place</th><th>K/D</th><th>Damage</th><th>Reward</th></tr></thead>
+                <tbody>
+                  {(data.matchParticipants ?? []).map((entry: any) => (
+                    <tr key={entry.id} className={entry.id === participant.id ? "selected-row" : ""}>
+                      <td>{entry.usernameSnapshot}{entry.isWinner ? " (Winner)" : ""}</td>
+                      <td>{entry.placement ?? "-"}</td>
+                      <td>{entry.kills} / {entry.deaths}</td>
+                      <td>{formatNumber(entry.damageDealt)} dealt, {formatNumber(entry.damageTaken)} taken</td>
+                      <td>{formatNumber(entry.rewardXp)} XP / {formatNumber(entry.rewardVec)} VEC</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      }}
+    </StatusBlock>
   );
 }
 
