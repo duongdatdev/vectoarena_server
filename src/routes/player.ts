@@ -331,27 +331,34 @@ router.post("/buy-skin", authenticateToken, async (req: AuthenticatedRequest, re
       });
 
       if (!existingSkin) {
-        const user = await tx.user.findUnique({
-          where: { id: req.user!.userId },
-          select: { coinBalance: true, vecUnlockedBalance: true },
-        });
-
-        if (!user) {
-          throw new Error("USER_NOT_FOUND");
-        }
-
         const isVecPurchase = skin.currencyType === "VEC";
-        const balanceBefore = isVecPurchase ? user.vecUnlockedBalance : user.coinBalance;
-        if (balanceBefore < skin.price) {
-          throw new Error(isVecPurchase ? "NOT_ENOUGH_VEC" : "NOT_ENOUGH_COINS");
-        }
+        const balanceField = isVecPurchase ? "vecUnlockedBalance" : "coinBalance";
 
-        await tx.user.update({
-          where: { id: req.user!.userId },
+        const updated = await tx.user.updateMany({
+          where: {
+            id: req.user!.userId,
+            [balanceField]: { gte: skin.price },
+          },
           data: isVecPurchase
             ? { vecUnlockedBalance: { decrement: skin.price } }
             : { coinBalance: { decrement: skin.price } },
         });
+
+        if (updated.count === 0) {
+          throw new Error(isVecPurchase ? "NOT_ENOUGH_VEC" : "NOT_ENOUGH_COINS");
+        }
+
+        const userAfter = await tx.user.findUnique({
+          where: { id: req.user!.userId },
+          select: { coinBalance: true, vecUnlockedBalance: true },
+        });
+
+        if (!userAfter) {
+          throw new Error("USER_NOT_FOUND");
+        }
+
+        const balanceAfter = isVecPurchase ? userAfter.vecUnlockedBalance : userAfter.coinBalance;
+        const balanceBefore = balanceAfter + skin.price;
 
         await tx.skinInventory.create({
           data: {
@@ -370,7 +377,7 @@ router.post("/buy-skin", authenticateToken, async (req: AuthenticatedRequest, re
             type: "PURCHASE",
             amount: -skin.price,
             balanceBefore,
-            balanceAfter: balanceBefore - skin.price,
+            balanceAfter,
             status: "OFFCHAIN_ONLY",
             referenceId: skin.id,
             note: `Purchased player skin ${skin.id}`,
