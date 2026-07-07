@@ -10,6 +10,7 @@ model User {
   id             String                @id @default(uuid()) @db.Uuid
   username       String                @unique @db.VarChar(32)
   password       String                @db.VarChar(255)
+  role           UserRole              @default(PLAYER)
   displayName    String?               @db.VarChar(64)
   vecUnlockedBalance Int                @default(0)
   vecLockedBalance   Int                @default(0)
@@ -23,6 +24,9 @@ model User {
   totalDeaths    Int                   @default(0)
   totalDamage    Int                   @default(0)
   bestPlacement  Int?
+  bannedAt       DateTime?
+  banReason      String?               @db.VarChar(255)
+  bannedByAdminId String?              @db.Uuid
   lastLoginAt    DateTime?
   createdAt      DateTime              @default(now())
   updatedAt      DateTime              @updatedAt
@@ -117,9 +121,63 @@ model MatchParticipant {
   user             User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
   killsDone        KillEvent[] @relation("KillBy")
   deathsTaken      KillEvent[] @relation("DeathOf")
+  antiCheatTelemetry AntiCheatTelemetry?
+  antiCheatAssessments AntiCheatAssessment[]
 
   @@unique([matchId, sessionId])
   @@index([userId, joinAt])
+}
+
+model AntiCheatTelemetry {
+  id                          String           @id @default(uuid()) @db.Uuid
+  matchParticipantId          String           @unique @db.Uuid
+  shotsAccepted               Int              @default(0)
+  hitsAccepted                Int              @default(0)
+  hitRate                     Float            @default(0)
+  invalidHitCount             Int              @default(0)
+  fireRateRejectCount         Int              @default(0)
+  totalDistance               Float            @default(0)
+  movementPerMinute           Float            @default(0)
+  maxMoveSpeedObserved        Float            @default(0)
+  moveClampCount              Int              @default(0)
+  moveClampRate               Float            @default(0)
+  pickupCount                 Int              @default(0)
+  pickupRejectCount           Int              @default(0)
+  meleeAttackCount            Int              @default(0)
+  meleeInvalidCount           Int              @default(0)
+  actionsRejected             Int              @default(0)
+  invalidActionRate           Float            @default(0)
+  killsPerMinute              Float            @default(0)
+  damagePerMinute             Float            @default(0)
+  damagePerKill               Float            @default(0)
+  primaryWeapon               String?          @db.VarChar(64)
+  weaponDamage                Int              @default(0)
+  weaponFireRatePerSecond     Float            @default(0)
+  allowedMaxHitDistance       Float            @default(60)
+  allowedMaxItemPickupDistance Float           @default(3)
+  allowedMoveSpeedWithGrace   Float            @default(4.725)
+  featureSnapshot             Json?
+  createdAt                   DateTime         @default(now())
+  updatedAt                   DateTime         @updatedAt
+  participant                 MatchParticipant @relation(fields: [matchParticipantId], references: [id], onDelete: Cascade)
+}
+
+model AntiCheatAssessment {
+  id                 String           @id @default(uuid()) @db.Uuid
+  matchParticipantId String           @db.Uuid
+  score              Float            @default(0)
+  label              String           @default("Normal") @db.VarChar(32)
+  modelVersion       String           @default("rules-v1") @db.VarChar(64)
+  reasonCodes        Json?
+  featureSnapshot    Json?
+  reviewedAt         DateTime?
+  reviewStatus       String?          @db.VarChar(32)
+  reviewerNote       String?          @db.VarChar(255)
+  createdAt          DateTime         @default(now())
+  participant        MatchParticipant @relation(fields: [matchParticipantId], references: [id], onDelete: Cascade)
+
+  @@index([label, score, createdAt])
+  @@index([matchParticipantId, createdAt])
 }
 
 model KillEvent {
@@ -335,4 +393,9 @@ enum SessionPlatform {
   IOS
   WEB
   UNKNOWN
+}
+
+enum UserRole {
+  PLAYER
+  ADMIN
 }

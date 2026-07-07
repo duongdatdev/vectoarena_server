@@ -10,6 +10,8 @@ import prisma from "../database/prisma";
 import { DEFAULT_PLAYER_SKIN_ID } from "../managers/SkinCatalog";
 import { validateEquippedSkinOrFallback } from "../managers/SkinOwnershipService";
 import { ProgressionManager } from "../managers/ProgressionManager";
+import { AntiCheatTracker, AntiCheatParticipantResult } from "../managers/AntiCheatTracker";
+import { AntiCheatAssessmentService } from "../managers/AntiCheatAssessmentService";
 
 type WeaponType = keyof WeaponConfigs;
 type PrismaWeaponType =
@@ -58,6 +60,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private static readonly MELEE_COOLDOWN_MS = 700;
   private static readonly MAX_MOVE_SPEED = 3.5;
   private static readonly MOVE_SPEED_GRACE_MULTIPLIER = 1.35;
+  private static readonly MOVE_CLAMP_DISTANCE_MARGIN = 0.1;
+  private static readonly MOVE_CLAMP_SPEED_MULTIPLIER = 1.5;
+  private static readonly MOVE_ANOMALY_SPEED_MULTIPLIER = 1.5;
+  private static readonly MOVE_ANOMALY_DISTANCE_MARGIN = 0.2;
   private static readonly MAX_MOVE_DELTA_TIME_MS = 250;
   private botManager: BotManager | null = null;
   private minHumanPlayersToStart = 1;
@@ -89,6 +95,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private finalizedMatchResults = false;
   private isAirdropMode = false;
   private gameOverQueued = false;
+  private antiCheatTracker = new AntiCheatTracker();
+  private antiCheatAssessmentService = new AntiCheatAssessmentService();
 
   private toPrismaWeaponType(weapon: string): PrismaWeaponType | null {
     return PRISMA_WEAPON_TYPE_BY_RUNTIME_NAME[weapon] ?? null;
@@ -270,6 +278,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
           sessionId: true,
           kills: true,
           deaths: true,
+          damageDealt: true,
+          damageTaken: true,
+          vecCollected: true,
+          vecDropped: true,
           vecCarried: true,
           rewardXp: true,
           rewardVec: true,
@@ -280,14 +292,20 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const shouldAwardXp = status === "FINISHED" && Boolean(match.startedAt);
       const shouldAwardVec = this.isAirdropMode && status === "FINISHED" && Boolean(match.startedAt);
       const maxPlayers = Math.max(1, match.maxPlayers ?? this.maxClients);
+      const endedAt = new Date();
+      const matchDurationSeconds = match.startedAt
+        ? Math.max(0, Math.round((endedAt.getTime() - match.startedAt.getTime()) / 1000))
+        : 0;
       const matchResultMessages: Array<{ sessionId: string; payload: Record<string, number | boolean> }> = [];
+      const participantResults: AntiCheatParticipantResult[] = [];
 
       await (prisma as any).$transaction(async (tx: any) => {
         await tx.match.update({
           where: { id: matchId },
           data: {
             status,
-            endedAt: new Date(),
+            endedAt,
+            durationSeconds: matchDurationSeconds,
           },
         });
 
@@ -300,6 +318,9 @@ export class BattleRoom extends Room<{ state: GameState }> {
           let rewardXp = 0;
           const statePlayer = this.state.players.get(participant.sessionId);
           const vecCarried = Math.max(0, Math.floor(statePlayer?.vecCarried ?? participant.vecCarried ?? 0));
+          const survivedSeconds = participant.leaveAt && match.startedAt
+            ? Math.max(0, Math.round((participant.leaveAt.getTime() - match.startedAt.getTime()) / 1000))
+            : matchDurationSeconds;
           let rewardVec = 0;
           let progressionPayload: Record<string, number | boolean> | null = null;
 
@@ -403,12 +424,33 @@ export class BattleRoom extends Room<{ state: GameState }> {
               placement,
               isWinner,
               vecCarried,
+              survivedSeconds,
               rewardXp: rewardXp > 0 ? rewardXp : participant.rewardXp,
               rewardVec: rewardVec > 0 ? rewardVec : participant.rewardVec,
             },
           });
+
+          participantResults.push({
+            participantId: participant.id,
+            sessionId: participant.sessionId,
+            userId: participant.userId ?? null,
+            placement,
+            isWinner,
+            kills: participant.kills,
+            deaths: participant.deaths,
+            damageDealt: participant.damageDealt,
+            damageTaken: participant.damageTaken,
+            vecCollected: participant.vecCollected,
+            vecDropped: participant.vecDropped,
+            survivedSeconds,
+            primaryWeapon: statePlayer?.currentWeapon ?? "",
+            weaponDamage: 0,
+            weaponFireRatePerSecond: 0,
+          });
         }
       });
+
+      await this.persistAntiCheatTelemetry(matchDurationSeconds, participantResults);
 
       for (const result of matchResultMessages) {
         const client = this.clients.find((roomClient) => roomClient.sessionId === result.sessionId);
@@ -417,6 +459,91 @@ export class BattleRoom extends Room<{ state: GameState }> {
     } catch (error) {
       console.error("[BattleRoom] Failed to finalize match:", error);
       this.finalizedMatchResults = false;
+    }
+  }
+
+  private async persistAntiCheatTelemetry(
+    matchDurationSeconds: number,
+    participantResults: AntiCheatParticipantResult[]
+  ): Promise<void> {
+    const context = {
+      mode: this.isAirdropMode ? "PLAY_TO_AIRDROP" : "BATTLE",
+      maxPlayers: this.maxClients,
+      matchDurationSeconds,
+      allowedMaxHitDistance: this.maxHitDistance,
+      allowedMaxItemPickupDistance: this.maxItemPickupDistance,
+      allowedMoveSpeedWithGrace: BattleRoom.MAX_MOVE_SPEED * BattleRoom.MOVE_SPEED_GRACE_MULTIPLIER,
+    };
+
+    for (const result of participantResults) {
+      try {
+        const featureSnapshot = this.antiCheatTracker.buildFeatureSnapshot(context, result);
+
+        await (prisma as any).antiCheatTelemetry.upsert({
+          where: { matchParticipantId: result.participantId },
+          update: {
+            shotsAccepted: featureSnapshot.shotsAccepted,
+            hitsAccepted: featureSnapshot.hitsAccepted,
+            hitRate: featureSnapshot.hitRate,
+            invalidHitCount: featureSnapshot.invalidHitCount,
+            fireRateRejectCount: featureSnapshot.fireRateRejectCount,
+            totalDistance: featureSnapshot.totalDistance,
+            movementPerMinute: featureSnapshot.movementPerMinute,
+            maxMoveSpeedObserved: featureSnapshot.maxMoveSpeedObserved,
+            moveClampCount: featureSnapshot.moveClampCount,
+            moveClampRate: featureSnapshot.moveClampRate,
+            pickupCount: featureSnapshot.pickupCount,
+            pickupRejectCount: featureSnapshot.pickupRejectCount,
+            meleeAttackCount: featureSnapshot.meleeAttackCount,
+            meleeInvalidCount: featureSnapshot.meleeInvalidCount,
+            actionsRejected: featureSnapshot.actionsRejected,
+            invalidActionRate: featureSnapshot.invalidActionRate,
+            killsPerMinute: featureSnapshot.killsPerMinute,
+            damagePerMinute: featureSnapshot.damagePerMinute,
+            damagePerKill: featureSnapshot.damagePerKill,
+            primaryWeapon: featureSnapshot.primaryWeapon || null,
+            weaponDamage: featureSnapshot.weaponDamage,
+            weaponFireRatePerSecond: featureSnapshot.weaponFireRatePerSecond,
+            allowedMaxHitDistance: featureSnapshot.allowedMaxHitDistance,
+            allowedMaxItemPickupDistance: featureSnapshot.allowedMaxItemPickupDistance,
+            allowedMoveSpeedWithGrace: featureSnapshot.allowedMoveSpeedWithGrace,
+            featureSnapshot,
+          },
+          create: {
+            matchParticipantId: result.participantId,
+            shotsAccepted: featureSnapshot.shotsAccepted,
+            hitsAccepted: featureSnapshot.hitsAccepted,
+            hitRate: featureSnapshot.hitRate,
+            invalidHitCount: featureSnapshot.invalidHitCount,
+            fireRateRejectCount: featureSnapshot.fireRateRejectCount,
+            totalDistance: featureSnapshot.totalDistance,
+            movementPerMinute: featureSnapshot.movementPerMinute,
+            maxMoveSpeedObserved: featureSnapshot.maxMoveSpeedObserved,
+            moveClampCount: featureSnapshot.moveClampCount,
+            moveClampRate: featureSnapshot.moveClampRate,
+            pickupCount: featureSnapshot.pickupCount,
+            pickupRejectCount: featureSnapshot.pickupRejectCount,
+            meleeAttackCount: featureSnapshot.meleeAttackCount,
+            meleeInvalidCount: featureSnapshot.meleeInvalidCount,
+            actionsRejected: featureSnapshot.actionsRejected,
+            invalidActionRate: featureSnapshot.invalidActionRate,
+            killsPerMinute: featureSnapshot.killsPerMinute,
+            damagePerMinute: featureSnapshot.damagePerMinute,
+            damagePerKill: featureSnapshot.damagePerKill,
+            primaryWeapon: featureSnapshot.primaryWeapon || null,
+            weaponDamage: featureSnapshot.weaponDamage,
+            weaponFireRatePerSecond: featureSnapshot.weaponFireRatePerSecond,
+            allowedMaxHitDistance: featureSnapshot.allowedMaxHitDistance,
+            allowedMaxItemPickupDistance: featureSnapshot.allowedMaxItemPickupDistance,
+            allowedMoveSpeedWithGrace: featureSnapshot.allowedMoveSpeedWithGrace,
+            featureSnapshot,
+          },
+        });
+
+        await this.antiCheatAssessmentService.assessParticipant(result.participantId, featureSnapshot);
+      } catch (error) {
+        console.error("[AntiCheat] Failed to persist telemetry:", error);
+      }
     }
   }
 
@@ -768,6 +895,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return BattleRoom.MAX_MOVE_SPEED * BattleRoom.MOVE_SPEED_GRACE_MULTIPLIER * (elapsedMs / 1000);
   }
 
+  private getObservedMoveSpeed(distance: number, allowedDistance: number): number {
+    const graceSpeed = BattleRoom.MAX_MOVE_SPEED * BattleRoom.MOVE_SPEED_GRACE_MULTIPLIER;
+    if (allowedDistance <= 0 || graceSpeed <= 0) return 0;
+    return distance / (allowedDistance / graceSpeed);
+  }
+
   async onCreate(options?: any) {
     this.isAirdropMode = options?.mode === "airdrop";
     const runtimeConfig = await ConfigService.loadActiveConfig();
@@ -834,8 +967,20 @@ export class BattleRoom extends Room<{ state: GameState }> {
         const dz = z - player.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
         const allowedDistance = this.getAllowedMoveDistance(client.sessionId, Date.now());
+        const rawObservedSpeed = this.getObservedMoveSpeed(distance, allowedDistance);
+        const allowedSpeedWithGrace = BattleRoom.MAX_MOVE_SPEED * BattleRoom.MOVE_SPEED_GRACE_MULTIPLIER;
+        const shouldClampMove = distance > allowedDistance + BattleRoom.MOVE_CLAMP_DISTANCE_MARGIN &&
+          rawObservedSpeed > allowedSpeedWithGrace * BattleRoom.MOVE_CLAMP_SPEED_MULTIPLIER;
+        const severeMoveAnomaly = shouldClampMove && (
+          distance > allowedDistance + BattleRoom.MOVE_ANOMALY_DISTANCE_MARGIN ||
+          rawObservedSpeed > allowedSpeedWithGrace * BattleRoom.MOVE_ANOMALY_SPEED_MULTIPLIER
+        );
+        const observedSpeedForTelemetry = distance > allowedDistance + BattleRoom.MOVE_CLAMP_DISTANCE_MARGIN
+          ? rawObservedSpeed
+          : Math.min(rawObservedSpeed, allowedSpeedWithGrace);
+        this.antiCheatTracker.trackMove(client.sessionId, distance, allowedDistance, observedSpeedForTelemetry, severeMoveAnomaly);
 
-        if (distance > allowedDistance) {
+        if (shouldClampMove) {
           if (distance > 0 && allowedDistance > 0) {
             const scale = allowedDistance / distance;
             player.x += dx * scale;
@@ -864,7 +1009,10 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       const weaponConfig = this.getWeaponConfig(player.currentWeapon);
       if (!weaponConfig || player.ammo <= 0) return;
-      if (!this.canProcessShot(client.sessionId, weaponConfig)) return;
+      if (!this.canProcessShot(client.sessionId, weaponConfig)) {
+        this.antiCheatTracker.trackFireRateReject(client.sessionId);
+        return;
+      }
 
       const { x, y, z, rx, ry, rz } = data ?? {};
       if (
@@ -881,6 +1029,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
 
       player.ammo = Math.max(0, player.ammo - 1);
       this.trackAcceptedShot(client.sessionId);
+      this.antiCheatTracker.trackAcceptedShot(
+        client.sessionId,
+        player.currentWeapon,
+        weaponConfig.damage,
+        weaponConfig.fireRatePerSecond
+      );
 
       // Broadcast shoot event to other clients
       this.broadcast(
@@ -933,6 +1087,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (!attacker) return;
       if (attacker.currentWeapon !== attacker.meleeWeapon || !this.isMeleeWeapon(attacker.currentWeapon)) return;
       if (!this.canProcessAction(client.sessionId, BattleRoom.MELEE_COOLDOWN_MS)) return;
+      this.antiCheatTracker.trackMeleeAttack(client.sessionId);
 
       this.broadcast("melee_attack", {
         attackerId: client.sessionId,
@@ -948,6 +1103,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const dz = attacker.z - target.z;
       const distance = Math.sqrt(dx * dx + dz * dz);
       if (!this.isTargetInsideMeleeArc(attacker, target)) {
+        this.antiCheatTracker.trackInvalidMelee(client.sessionId);
         console.warn(
           `[BattleRoom] Invalid melee_attack from ${attacker.username} to ${target.username} due to range/angle: ${distance}`
         );
@@ -975,7 +1131,11 @@ export class BattleRoom extends Room<{ state: GameState }> {
       if (shooter && target && target.hp > 0) {
         if (shooter.currentWeapon !== shooter.rangedWeapon || shooter.rangedWeapon.length === 0) return;
         const weaponConfig = this.getWeaponConfig(shooter.currentWeapon);
-        if (!weaponConfig || !this.consumeAcceptedShot(client.sessionId)) return;
+        if (!weaponConfig) return;
+        if (!this.consumeAcceptedShot(client.sessionId)) {
+          this.antiCheatTracker.trackFireRateReject(client.sessionId);
+          return;
+        }
 
         // anticheat Distance Validation
         const dx = shooter.x - target.x;
@@ -983,11 +1143,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance <= this.maxHitDistance) {
+          this.antiCheatTracker.trackAcceptedHit(client.sessionId);
           target.hp -= weaponConfig.damage;
           if (target.hp <= 0 && !target.isDead) {
              this.handlePlayerDeath(targetId, client.sessionId, shooter.currentWeapon, weaponConfig.damage);
           }
         } else {
+          this.antiCheatTracker.trackInvalidHit(client.sessionId);
           console.warn(`[BattleRoom] Invalid hit from ${shooter.username} to ${target.username} due to distance: ${distance}`);
         }
       }
@@ -1015,6 +1177,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const distance = Math.sqrt(dx * dx + dz * dz);
 
       if (distance > this.maxItemPickupDistance) {
+        this.antiCheatTracker.trackPickupReject(client.sessionId);
         if (item.pickupBy === client.sessionId) {
           item.pickupBy = "";
           item.pickupProgress = 0;
@@ -1060,6 +1223,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
       const distance = Math.sqrt(dx * dx + dz * dz);
 
       if (distance > this.maxItemPickupDistance) {
+        this.antiCheatTracker.trackPickupReject(client.sessionId);
         console.warn(
           `[BattleRoom] Invalid pickup_item from ${player.username} for ${itemId} due to distance: ${distance}`
         );
@@ -1094,6 +1258,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
         this.acceptedShotsBySessionId.delete(client.sessionId);
       }
 
+      this.antiCheatTracker.trackPickup(client.sessionId);
       this.state.items.delete(itemId);
       this.broadcast("item_picked", {
         playerId: client.sessionId,
@@ -1105,10 +1270,18 @@ export class BattleRoom extends Room<{ state: GameState }> {
     });
   }
 
-  onAuth(client: Client, options: any) {
+  async onAuth(client: Client, options: any) {
     if (options.accessToken) {
       const decoded = AuthManager.verifyToken(options.accessToken);
       if (decoded) {
+        const user = await (prisma as any).user.findUnique({
+          where: { id: decoded.userId },
+          select: { bannedAt: true, banReason: true },
+        });
+        if (user?.bannedAt) {
+          throw new Error(`ACCOUNT_BANNED:${user.banReason || "No reason provided."}`);
+        }
+
         (client as any).username = decoded.username;
         (client as any).userId = decoded.userId;
         return true;
@@ -1140,6 +1313,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const player = PlayerSpawner.createPlayer(client, options, this.clients.length);
     player.skinId = await this.getEquippedPlayerSkin(client);
     this.state.players.set(client.sessionId, player);
+    this.antiCheatTracker.registerParticipant(client.sessionId);
     void this.createParticipantRecord(client, player.username);
     
     console.log(`[BattleRoom] Client joined: ${client.sessionId} (Username: ${player.username})`);
@@ -1177,6 +1351,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.lastShootAtBySessionId.delete(client.sessionId);
     this.acceptedShotsBySessionId.delete(client.sessionId);
     this.lastMoveAtBySessionId.delete(client.sessionId);
+    this.antiCheatTracker.unregisterParticipant(client.sessionId);
     void this.markParticipantLeft(client.sessionId);
     console.log(`[BattleRoom] Client permanently left: ${username}`);
 
