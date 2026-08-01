@@ -58,6 +58,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private static readonly MELEE_RANGE = 2.75;
   private static readonly MELEE_ATTACK_ANGLE_DEGREES = 85;
   private static readonly MELEE_COOLDOWN_MS = 700;
+  private static readonly RANGED_HIT_ANGLE_DEGREES = 40;
   private static readonly MAX_MOVE_SPEED = 3.5;
   private static readonly MOVE_SPEED_GRACE_MULTIPLIER = 1.35;
   private static readonly MOVE_CLAMP_DISTANCE_MARGIN = 0.1;
@@ -850,6 +851,28 @@ export class BattleRoom extends Room<{ state: GameState }> {
     return dot >= minDot;
   }
 
+  // Validates that the target lies inside the shooter's aim cone (XZ plane).
+  // Range is validated separately per-weapon, so this only checks direction.
+  private isTargetInsideAimCone(shooter: any, target: any, angleDegrees: number): boolean {
+    const dx = target.x - shooter.x;
+    const dz = target.z - shooter.z;
+    const distance = Math.sqrt(dx * dx + dz * dz);
+    if (distance <= 0.001) {
+      // Point-blank: no meaningful direction, accept.
+      return true;
+    }
+
+    const rotationRad = (shooter.rotation * Math.PI) / 180;
+    const forwardX = Math.sin(rotationRad);
+    const forwardZ = Math.cos(rotationRad);
+    const directionX = dx / distance;
+    const directionZ = dz / distance;
+    const dot = forwardX * directionX + forwardZ * directionZ;
+    const minDot = Math.cos((angleDegrees * 0.5 * Math.PI) / 180);
+
+    return dot >= minDot;
+  }
+
   private canProcessShot(sessionId: string, weaponConfig: WeaponConfig): boolean {
     return this.canProcessAction(sessionId, 1000 / weaponConfig.fireRatePerSecond);
   }
@@ -1111,7 +1134,13 @@ export class BattleRoom extends Room<{ state: GameState }> {
       }
 
       target.hp -= BattleRoom.MELEE_DAMAGE;
-      if (target.hp <= 0 && !target.isDead) {
+      const meleeLethal = target.hp <= 0 && !target.isDead;
+      this.broadcast("damage_taken", {
+        victimId: targetId,
+        damage: BattleRoom.MELEE_DAMAGE,
+        lethal: meleeLethal,
+      });
+      if (meleeLethal) {
         this.handlePlayerDeath(targetId, client.sessionId, attacker.currentWeapon, BattleRoom.MELEE_DAMAGE);
       }
     });
@@ -1137,20 +1166,34 @@ export class BattleRoom extends Room<{ state: GameState }> {
           return;
         }
 
-        // anticheat Distance Validation
+        // anticheat Distance + Aim Direction Validation
         const dx = shooter.x - target.x;
         const dz = shooter.z - target.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
-        
-        if (distance <= this.maxHitDistance) {
-          this.antiCheatTracker.trackAcceptedHit(client.sessionId);
-          target.hp -= weaponConfig.damage;
-          if (target.hp <= 0 && !target.isDead) {
-             this.handlePlayerDeath(targetId, client.sessionId, shooter.currentWeapon, weaponConfig.damage);
-          }
-        } else {
+        const weaponRange = weaponConfig.maxHitDistance ?? this.maxHitDistance;
+
+        if (distance > weaponRange) {
           this.antiCheatTracker.trackInvalidHit(client.sessionId);
-          console.warn(`[BattleRoom] Invalid hit from ${shooter.username} to ${target.username} due to distance: ${distance}`);
+          console.warn(`[BattleRoom] Invalid hit from ${shooter.username} to ${target.username} due to distance: ${distance.toFixed(2)} (weaponRange=${weaponRange})`);
+          return;
+        }
+
+        if (!this.isTargetInsideAimCone(shooter, target, BattleRoom.RANGED_HIT_ANGLE_DEGREES)) {
+          this.antiCheatTracker.trackInvalidHit(client.sessionId);
+          console.warn(`[BattleRoom] Invalid hit from ${shooter.username} to ${target.username} due to aim direction`);
+          return;
+        }
+
+        this.antiCheatTracker.trackAcceptedHit(client.sessionId);
+        target.hp -= weaponConfig.damage;
+        const lethal = target.hp <= 0 && !target.isDead;
+        this.broadcast("damage_taken", {
+          victimId: targetId,
+          damage: weaponConfig.damage,
+          lethal,
+        });
+        if (lethal) {
+          this.handlePlayerDeath(targetId, client.sessionId, shooter.currentWeapon, weaponConfig.damage);
         }
       }
     });
