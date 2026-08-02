@@ -9,6 +9,8 @@ import playerRoutes from "./routes/player";
 import web3Routes from "./routes/web3Routes";
 import walletRoutes from "./routes/wallet";
 import nftRoutes from "./routes/nft";
+import antiCheatRoutes from "./routes/anticheat";
+import adminRoutes from "./routes/admin";
 
 const port = Number(process.env.PORT || 2567);
 const app = express();
@@ -22,6 +24,8 @@ app.use("/player", playerRoutes);
 app.use("/web3", web3Routes);
 app.use("/wallet", walletRoutes);
 app.use("/nft", nftRoutes);
+app.use("/admin/anticheat", antiCheatRoutes);
+app.use("/admin", adminRoutes);
 
 const httpServer = createServer(app);
 const gameServer = new Server({
