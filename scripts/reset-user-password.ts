@@ -21,7 +21,15 @@ async function main() {
         process.exit(2);
     }
 
-    console.log(`Password reset for user "${usernameArg}" (${result.count} row).`);
+    const updatedUser = await (prisma as any).user.findUnique({
+        where: { username: usernameArg },
+        select: { password: true },
+    });
+    if (!updatedUser || !(await bcrypt.compare(passwordArg, updatedUser.password))) {
+        throw new Error("Password verification failed after reset.");
+    }
+
+    console.log(`Password reset and verified for user "${usernameArg}" (${result.count} row).`);
 }
 
 main()
