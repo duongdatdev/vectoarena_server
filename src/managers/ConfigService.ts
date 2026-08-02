@@ -20,6 +20,7 @@ export type WeaponConfig = {
   damage: number;
   fireRatePerSecond: number;
   maxAmmo: number;
+  maxHitDistance?: number;
 };
 
 export type WeaponConfigs = {
@@ -213,6 +214,9 @@ export class ConfigService {
     }
     if (this.isPositiveInteger(source.maxAmmo)) {
       target.maxAmmo = source.maxAmmo;
+    }
+    if (this.isPositiveNumber(source.maxHitDistance)) {
+      target.maxHitDistance = source.maxHitDistance;
     }
   }
 }

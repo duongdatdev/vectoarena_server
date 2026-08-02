@@ -119,6 +119,10 @@ export class AntiCheatAssessmentService {
       reasonCodes.push("high_invalid_hit");
       score += 0.35;
     }
+    if (featureSnapshot.invalidHitCount > 5) {
+      reasonCodes.push("high_aim_reject");
+      score += 0.15;
+    }
     if (featureSnapshot.moveClampCount > 2) {
       reasonCodes.push("high_move_clamp");
       score += 0.25;

@@ -1,26 +1,55 @@
 import { Router, Request, Response } from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit";
 import { Prisma } from "@prisma/client";
-import dotenv from "dotenv";
 import prisma from "../database/prisma";
 import { DEFAULT_PLAYER_SKIN_ID } from "../managers/SkinCatalog";
-
-dotenv.config();
+import { JWT_SECRET, JWT_EXPIRES_IN } from "../config/env";
 
 const router = Router();
 
-const jwtSecret = process.env.JWT_SECRET || "supersecretkey";
+const authLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many attempts. Please try again in a minute." },
+});
 
-router.post("/register", async (req: Request, res: Response) => {
-    const { username, password } = req.body as { username?: string; password?: string };
+const BCRYPT_COST = Number(process.env.BCRYPT_COST || 12);
+const MIN_USERNAME_LEN = 3;
+const MAX_USERNAME_LEN = 32;
+const MIN_PASSWORD_LEN = 8;
+const MAX_PASSWORD_LEN = 128;
+const USERNAME_REGEX = /^[a-zA-Z0-9_.-]+$/;
 
-    if (!username || !password) {
-        return res.status(400).json({ error: "Username and password are required." });
+function validateCredentials(username?: unknown, password?: unknown): string | null {
+    if (typeof username !== "string" || typeof password !== "string") {
+        return "Username and password are required.";
+    }
+    if (username.length < MIN_USERNAME_LEN || username.length > MAX_USERNAME_LEN) {
+        return `Username must be ${MIN_USERNAME_LEN}-${MAX_USERNAME_LEN} characters.`;
+    }
+    if (!USERNAME_REGEX.test(username)) {
+        return "Username can only contain letters, numbers, dot, dash and underscore.";
+    }
+    if (password.length < MIN_PASSWORD_LEN || password.length > MAX_PASSWORD_LEN) {
+        return `Password must be ${MIN_PASSWORD_LEN}-${MAX_PASSWORD_LEN} characters.`;
+    }
+    return null;
+}
+
+router.post("/register", authLimiter, async (req: Request, res: Response) => {
+    const { username, password } = req.body as { username?: unknown; password?: unknown };
+
+    const validationError = validateCredentials(username, password);
+    if (validationError) {
+        return res.status(400).json({ error: validationError });
     }
 
     try {
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword = await bcrypt.hash(password as string, BCRYPT_COST);
         const user = await (prisma as any).user.create({
             data: {
                 username,
@@ -50,16 +79,17 @@ router.post("/register", async (req: Request, res: Response) => {
     }
 });
 
-router.post("/login", async (req: Request, res: Response) => {
-    const { username, password } = req.body as { username?: string; password?: string };
+router.post("/login", authLimiter, async (req: Request, res: Response) => {
+    const { username, password } = req.body as { username?: unknown; password?: unknown };
 
-    if (!username || !password) {
-        return res.status(400).json({ error: "Username and password are required." });
+    const validationError = validateCredentials(username, password);
+    if (validationError) {
+        return res.status(400).json({ error: validationError });
     }
 
     try {
         const user = await (prisma as any).user.findUnique({
-            where: { username }
+            where: { username: username as string }
         });
 
         if (!user) {
@@ -74,13 +104,13 @@ router.post("/login", async (req: Request, res: Response) => {
             });
         }
 
-        const isValid = await bcrypt.compare(password, user.password);
+        const isValid = await bcrypt.compare(password as string, user.password);
         if (!isValid) {
             return res.status(401).json({ error: "Invalid username or password." });
         }
 
-        const token = jwt.sign({ userId: user.id, username: user.username, role: user.role }, jwtSecret, {
-            expiresIn: "2h"
+        const token = jwt.sign({ userId: user.id, username: user.username, role: user.role }, JWT_SECRET, {
+            expiresIn: JWT_EXPIRES_IN as any
         });
 
         return res.json({

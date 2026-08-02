@@ -1,3 +1,4 @@
+import "./config/env";
 import { Server } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { createServer } from "http";
@@ -11,12 +12,28 @@ import walletRoutes from "./routes/wallet";
 import nftRoutes from "./routes/nft";
 import antiCheatRoutes from "./routes/anticheat";
 import adminRoutes from "./routes/admin";
+import prisma, { pool } from "./database/prisma";
+import { ALLOWED_ORIGINS } from "./config/env";
 
 const port = Number(process.env.PORT || 2567);
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+const corsOptions: cors.CorsOptions = ALLOWED_ORIGINS.length > 0
+    ? {
+        origin: (origin, callback) => {
+            if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+                return callback(null, true);
+            }
+            return callback(new Error(`CORS: origin ${origin} not allowed`));
+        },
+        credentials: false,
+    }
+    : {};
+
+app.use(cors(corsOptions));
+app.use(express.json({ limit: "32kb" }));
+
+app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
 
 //auth routes
 app.use("/auth", authRoutes);
@@ -43,3 +60,46 @@ gameServer.listen(port)
         console.error(err);
         process.exit(1);
     });
+
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[GameServer] Received ${signal}, shutting down gracefully...`);
+
+    const shutdownTimeout = setTimeout(() => {
+        console.error("[GameServer] Graceful shutdown timed out. Forcing exit.");
+        process.exit(1);
+    }, 30_000);
+    shutdownTimeout.unref();
+
+    try {
+        await gameServer.gracefullyShutdown(false);
+    } catch (err) {
+        console.error("[GameServer] Error during gameServer.gracefullyShutdown:", err);
+    }
+    try {
+        await prisma.$disconnect();
+    } catch (err) {
+        console.error("[GameServer] Error during prisma.$disconnect:", err);
+    }
+    try {
+        await pool.end();
+    } catch (err) {
+        console.error("[GameServer] Error during pg pool.end:", err);
+    }
+    clearTimeout(shutdownTimeout);
+    console.log("[GameServer] Shutdown complete.");
+    process.exit(0);
+}
+
+process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
+process.on("SIGINT", () => { void shutdown("SIGINT"); });
+
+process.on("unhandledRejection", (reason) => {
+    console.error("[UnhandledRejection]", reason);
+});
+process.on("uncaughtException", (err) => {
+    console.error("[UncaughtException]", err);
+    void shutdown("uncaughtException");
+});

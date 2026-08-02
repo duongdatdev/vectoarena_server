@@ -15,17 +15,17 @@
   "medicalKitHeal": 30,
   "reconnectTimeoutSeconds": 15,
   "weapons": {
-    "Rifle":          { "damage": 10, "fireRatePerSecond": 10,   "maxAmmo": 30 },
-    "Shotgun":        { "damage": 25, "fireRatePerSecond": 1.5,  "maxAmmo": 8 },
-    "Pistol":         { "damage": 12, "fireRatePerSecond": 5,    "maxAmmo": 12 },
-    "BurstRifle":     { "damage": 14, "fireRatePerSecond": 8,    "maxAmmo": 24 },
-    "Sniper":         { "damage": 50, "fireRatePerSecond": 0.8,  "maxAmmo": 5 },
-    "HunterSniper":   { "damage": 45, "fireRatePerSecond": 1,    "maxAmmo": 6 },
-    "Launcher":       { "damage": 60, "fireRatePerSecond": 0.5,  "maxAmmo": 3 },
-    "MachineGun":     { "damage": 8,  "fireRatePerSecond": 14,   "maxAmmo": 50 },
-    "Minigun":        { "damage": 6,  "fireRatePerSecond": 20,   "maxAmmo": 80 },
-    "BlasterShotgun": { "damage": 30, "fireRatePerSecond": 1.2,  "maxAmmo": 6 },
-    "RebelRifle":     { "damage": 12, "fireRatePerSecond": 9,    "maxAmmo": 25 }
+    "Rifle":          { "damage": 10, "fireRatePerSecond": 10,   "maxAmmo": 30, "maxHitDistance": 40 },
+    "Shotgun":        { "damage": 25, "fireRatePerSecond": 1.5,  "maxAmmo": 8,  "maxHitDistance": 14 },
+    "Pistol":         { "damage": 12, "fireRatePerSecond": 5,    "maxAmmo": 12, "maxHitDistance": 25 },
+    "BurstRifle":     { "damage": 14, "fireRatePerSecond": 8,    "maxAmmo": 24, "maxHitDistance": 40 },
+    "Sniper":         { "damage": 50, "fireRatePerSecond": 0.8,  "maxAmmo": 5,  "maxHitDistance": 80 },
+    "HunterSniper":   { "damage": 45, "fireRatePerSecond": 1,    "maxAmmo": 6,  "maxHitDistance": 80 },
+    "Launcher":       { "damage": 60, "fireRatePerSecond": 0.5,  "maxAmmo": 3,  "maxHitDistance": 50 },
+    "MachineGun":     { "damage": 8,  "fireRatePerSecond": 14,   "maxAmmo": 50, "maxHitDistance": 45 },
+    "Minigun":        { "damage": 6,  "fireRatePerSecond": 20,   "maxAmmo": 80, "maxHitDistance": 35 },
+    "BlasterShotgun": { "damage": 30, "fireRatePerSecond": 1.2,  "maxAmmo": 6,  "maxHitDistance": 12 },
+    "RebelRifle":     { "damage": 12, "fireRatePerSecond": 9,    "maxAmmo": 25, "maxHitDistance": 40 }
   },
   "itemSpawnWeights": {
     "Rifle": 3,

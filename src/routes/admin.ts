@@ -300,21 +300,27 @@ router.post("/users/:id/currency-adjustments", async (req: AuthenticatedRequest,
 
   try {
     const result = await (prisma as any).$transaction(async (tx: any) => {
-      const user = await tx.user.findUnique({ where: { id: req.params.id } });
-      if (!user) return null;
-
       const balanceField =
         currencyType === "COIN" ? "coinBalance" : vecBucket === "LOCKED" ? "vecLockedBalance" : "vecUnlockedBalance";
-      const balanceBefore = user[balanceField];
-      const balanceAfter = balanceBefore + amount;
 
-      if (balanceAfter < 0) {
+      const whereClause: any = { id: req.params.id };
+      if (amount < 0) {
+        whereClause[balanceField] = { gte: -amount };
+      }
+
+      const updated = await tx.user.updateMany({
+        where: whereClause,
+        data: { [balanceField]: { increment: amount } },
+      });
+
+      if (updated.count === 0) {
+        const stillExists = await tx.user.findUnique({ where: { id: req.params.id }, select: { id: true } });
+        if (!stillExists) return null;
         throw new Error("NEGATIVE_BALANCE");
       }
 
-      const updatedUser = await tx.user.update({
+      const updatedUser = await tx.user.findUnique({
         where: { id: req.params.id },
-        data: { [balanceField]: balanceAfter },
         select: {
           id: true,
           username: true,
@@ -323,6 +329,11 @@ router.post("/users/:id/currency-adjustments", async (req: AuthenticatedRequest,
           vecLockedBalance: true,
         },
       });
+
+      if (!updatedUser) return null;
+
+      const balanceAfter = (updatedUser as any)[balanceField];
+      const balanceBefore = balanceAfter - amount;
 
       const transaction = await tx.currencyTransaction.create({
         data: {

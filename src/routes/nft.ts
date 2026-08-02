@@ -8,6 +8,8 @@ import {
   NftOwnershipServiceError,
   nftOwnershipService,
 } from "../managers/NftOwnershipService";
+import { web3ConfirmLimiter } from "../middleware/rateLimiters";
+import { NFT_MIN_CONFIRMATIONS } from "../config/env";
 
 const router = Router();
 const SKIN_PURCHASED_EVENT_ABI = ["event SkinPurchased(address buyer, uint256 tokenId, uint256 price)"];
@@ -299,7 +301,7 @@ router.post("/sync", authenticateToken, async (req: AuthenticatedRequest, res: R
   }
 });
 
-router.post("/purchase/confirm", authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<any> => {
+router.post("/purchase/confirm", web3ConfirmLimiter, authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<any> => {
   const userId = req.user?.userId;
   if (!userId) {
     return res.status(401).json({ error: "User authentication is required." });
@@ -418,6 +420,18 @@ router.post("/purchase/confirm", authenticateToken, async (req: AuthenticatedReq
       return res.status(400).json({
         error: "NFT purchase transaction failed.",
         code: "TX_FAILED",
+      });
+    }
+
+    const currentBlockNumber = await provider.getBlockNumber();
+    const confirmations = currentBlockNumber - receipt.blockNumber + 1;
+    if (confirmations < NFT_MIN_CONFIRMATIONS) {
+      return res.status(202).json({
+        error: "Transaction is waiting for additional confirmations.",
+        code: "TX_UNCONFIRMED",
+        pending: true,
+        confirmations,
+        requiredConfirmations: NFT_MIN_CONFIRMATIONS,
       });
     }
 
