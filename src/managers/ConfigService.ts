@@ -69,7 +69,7 @@ export class ConfigService {
       maxHitDistance: 60,
       maxItemPickupDistance: 3,
       medicalKitHeal: 30,
-      reconnectTimeoutSeconds: 15,
+      reconnectTimeoutSeconds: 30,
       weapons: {
         Rifle: { damage: 10, fireRatePerSecond: 10, maxAmmo: 30 },
         Shotgun: { damage: 25, fireRatePerSecond: 1.5, maxAmmo: 8 },

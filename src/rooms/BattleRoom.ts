@@ -73,7 +73,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private maxItemPickupDistance = 3;
   private medicalKitHeal = 30;
   private maxHitDistance = 60;
-  private reconnectTimeoutSeconds = 15;
+  private reconnectTimeoutSeconds = 30;
   private weaponConfigs: WeaponConfigs = {
     Rifle: { damage: 10, fireRatePerSecond: 10, maxAmmo: 30 },
     Shotgun: { damage: 25, fireRatePerSecond: 1.5, maxAmmo: 8 },
@@ -1374,7 +1374,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const consented = (code === CloseCode.NORMAL_CLOSURE);
 
     if (!consented) {
-      console.log(`[BattleRoom] Client unexpectedly left: ${player.username}. Waiting 15s for reconnection...`);
+      console.log(`[BattleRoom] Client unexpectedly left: ${player.username}. Waiting ${this.reconnectTimeoutSeconds}s for reconnection...`);
       try {
         await this.allowReconnection(client, this.reconnectTimeoutSeconds);
         console.log(`[BattleRoom] Client reconnected: ${player.username}`);
