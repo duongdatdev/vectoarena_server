@@ -257,6 +257,50 @@ export class BattleRoom extends Room<{ state: GameState }> {
     void this.finalizeMatch("FINISHED");
   }
 
+  private async sendEliminationResult(sessionId: string): Promise<void> {
+    const client = this.clients.find((roomClient) => roomClient.sessionId === sessionId);
+    const player = this.state.players.get(sessionId);
+    if (!client || !player) return;
+
+    const placement = this.getPlacementForSession(sessionId);
+    const kills = Math.max(0, Math.floor(player.kills));
+    const rewardXp = ProgressionManager.calculateMatchXp({
+      maxPlayers: this.maxClients,
+      placement,
+      kills,
+      isWinner: false,
+    });
+    const payload: Record<string, number | boolean> = {
+      placement,
+      kills,
+      xpEarned: rewardXp,
+      vecEarned: this.isAirdropMode ? Math.max(0, Math.floor(player.vecCarried)) : 0,
+      isWinner: false,
+      isFinalized: false,
+    };
+
+    const userId = (client as any).userId as string | undefined;
+    if (userId) {
+      try {
+        const user = await (prisma as any).user.findUnique({
+          where: { id: userId },
+          select: { level: true, xp: true },
+        });
+
+        if (user) {
+          Object.assign(payload, ProgressionManager.addXp(
+            { level: user.level, xp: user.xp },
+            rewardXp
+          ));
+        }
+      } catch (error) {
+        console.error(`[BattleRoom] Failed to build elimination result for ${sessionId}:`, error);
+      }
+    }
+
+    client.send("match_result", payload);
+  }
+
   private async finalizeMatch(status: "FINISHED" | "ABANDONED"): Promise<void> {
     if (!this.matchRecordId) return;
     if (this.finalizedMatchResults) return;
@@ -415,6 +459,7 @@ export class BattleRoom extends Room<{ state: GameState }> {
                 vecEarned: rewardVec,
                 ...(progressionPayload ?? {}),
                 isWinner,
+                isFinalized: true,
               },
             });
           }
@@ -451,12 +496,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
         }
       });
 
-      await this.persistAntiCheatTelemetry(matchDurationSeconds, participantResults);
-
       for (const result of matchResultMessages) {
         const client = this.clients.find((roomClient) => roomClient.sessionId === result.sessionId);
         client?.send("match_result", result.payload);
       }
+
+      await this.persistAntiCheatTelemetry(matchDurationSeconds, participantResults);
     } catch (error) {
       console.error("[BattleRoom] Failed to finalize match:", error);
       this.finalizedMatchResults = false;
@@ -731,6 +776,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
       this.rollVecDropsOnDeath(victimId, victim, victim.x, victim.z);
     }
 
+    void this.sendEliminationResult(victimId);
+
     this.queueGameOverIfNeeded();
   }
 
@@ -764,6 +811,8 @@ export class BattleRoom extends Room<{ state: GameState }> {
     if (this.isAirdropMode) {
       this.rollVecDropsOnDeath(victimId, victim, victim.x, victim.z);
     }
+
+    void this.sendEliminationResult(victimId);
 
     this.queueGameOverIfNeeded();
   }
