@@ -252,6 +252,15 @@ export class BattleRoom extends Room<{ state: GameState }> {
   private finishPlayingMatch(): void {
     if (this.state.matchState !== "PLAYING") return;
 
+    // Persist the surviving player's placement before broadcasting GAME_OVER.
+    // A client may leave immediately after receiving the event, which removes
+    // its Player state while match finalization is still running.
+    this.state.players.forEach((player, sessionId) => {
+      if (!player.isDead && player.hp > 0 && !this.placementBySessionId.has(sessionId)) {
+        this.placementBySessionId.set(sessionId, 1);
+      }
+    });
+
     this.state.matchState = "FINISHED";
     this.broadcast("GAME_OVER");
     void this.finalizeMatch("FINISHED");
@@ -1420,9 +1429,12 @@ export class BattleRoom extends Room<{ state: GameState }> {
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
 
-    const consented = (code === CloseCode.NORMAL_CLOSURE);
+    // Colyseus sends its application-level CONSENTED code (4000) when the
+    // client calls Room.Leave(). NORMAL_CLOSURE (1000) is also intentional.
+    const consented = code === CloseCode.CONSENTED || code === CloseCode.NORMAL_CLOSURE;
+    const matchFinished = this.state.matchState === "FINISHED";
 
-    if (!consented) {
+    if (!consented && !matchFinished) {
       console.log(`[BattleRoom] Client unexpectedly left: ${player.username}. Waiting ${this.reconnectTimeoutSeconds}s for reconnection...`);
       try {
         await this.allowReconnection(client, this.reconnectTimeoutSeconds);
@@ -1447,22 +1459,29 @@ export class BattleRoom extends Room<{ state: GameState }> {
     this.lastMoveAtBySessionId.delete(client.sessionId);
     this.antiCheatTracker.unregisterParticipant(client.sessionId);
     void this.markParticipantLeft(client.sessionId);
-    console.log(`[BattleRoom] Client permanently left: ${username}`);
+    if (matchFinished) {
+      console.log(`[BattleRoom] Client left normally after match finished: ${username}`);
+    } else if (consented) {
+      console.log(`[BattleRoom] Client voluntarily left: ${username}`);
+    } else {
+      console.log(`[BattleRoom] Client permanently left after reconnection timeout: ${username}`);
+    }
 
     if (this.getHumanPlayerCount() === 0) {
       this.clearBotFillTimer();
-      const finalStatus = this.state.matchState === "PLAYING" ? "FINISHED" : "ABANDONED";
       if (this.state.matchState === "PLAYING") {
         this.state.matchState = "FINISHED";
+        void this.finalizeMatch("FINISHED");
+      } else if (this.state.matchState === "WAITING") {
+        void this.finalizeMatch("ABANDONED");
       }
-      void this.finalizeMatch(finalStatus);
     }
 
     if (this.state.players.size > 0 && this.state.aliveCount <= 1 && this.state.matchState === "PLAYING") {
       this.finishPlayingMatch();
     }
 
-    if (this.state.matchState !== "PLAYING") {
+    if (this.state.matchState === "WAITING") {
       this.unlock();
       this.scheduleBotFillIfNeeded();
       console.log(`[BattleRoom] Room unlocked since match hasn't started and a player left.`);

@@ -15,7 +15,14 @@ type AssessmentResult = {
 
 const REVIEW_THRESHOLD = 0.5;
 const SUSPICIOUS_THRESHOLD = 0.75;
-const SCORER_TIMEOUT_MS = 5000;
+const DEFAULT_SCORER_TIMEOUT_MS = 15000;
+
+function scorerTimeoutMs(): number {
+  const configured = Number(process.env.ANTICHEAT_SCORER_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_SCORER_TIMEOUT_MS;
+}
 
 export class AntiCheatAssessmentService {
   constructor(
@@ -68,6 +75,7 @@ export class AntiCheatAssessmentService {
 
   private runScorer(featureSnapshot: AntiCheatFeatureSnapshot): Promise<string> {
     return new Promise((resolve, reject) => {
+      const timeoutMs = scorerTimeoutMs();
       const child = spawn(this.pythonCommand, [this.scorerPath], {
         cwd: path.resolve(__dirname, "../.."),
         stdio: ["pipe", "pipe", "pipe"],
@@ -80,8 +88,8 @@ export class AntiCheatAssessmentService {
         if (settled) return;
         settled = true;
         child.kill();
-        reject(new Error(`scorer timeout after ${SCORER_TIMEOUT_MS}ms`));
-      }, SCORER_TIMEOUT_MS);
+        reject(new Error(`scorer timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
 
       child.stdout.on("data", (chunk) => {
         stdout += chunk.toString();
